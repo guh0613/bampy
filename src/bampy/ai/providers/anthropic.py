@@ -54,43 +54,139 @@ _THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.LOW: 2048,
     ThinkingLevel.MEDIUM: 8192,
     ThinkingLevel.HIGH: 16384,
+    ThinkingLevel.XHIGH: 16384,
 }
 
-# Models that support adaptive thinking (effort-based)
-_ADAPTIVE_MODELS = {"claude-opus-4", "claude-sonnet-4", "claude-haiku-4"}
+_INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
+_MIN_OUTPUT_TOKENS = 1024
 
 _EFFORT_MAP: dict[ThinkingLevel, str] = {
     ThinkingLevel.MINIMAL: "low",
     ThinkingLevel.LOW: "low",
     ThinkingLevel.MEDIUM: "medium",
     ThinkingLevel.HIGH: "high",
+    ThinkingLevel.XHIGH: "high",
 }
+
+
+def _supports_adaptive_thinking(model_id: str) -> bool:
+    """Adaptive thinking is currently documented for Claude Opus/Sonnet 4.6."""
+    return (
+        "claude-opus-4-6" in model_id
+        or "claude-opus-4.6" in model_id
+        or "claude-sonnet-4-6" in model_id
+        or "claude-sonnet-4.6" in model_id
+    )
+
+
+def _supports_effort(model_id: str) -> bool:
+    """Effort is documented for Claude Opus 4.5 and the adaptive 4.6 models."""
+    return _supports_adaptive_thinking(model_id) or "claude-opus-4-5" in model_id or "claude-opus-4.5" in model_id
+
+
+def _supports_max_effort(model_id: str) -> bool:
+    """The `max` effort level is currently documented for Claude Opus 4.6 only."""
+    return "claude-opus-4-6" in model_id or "claude-opus-4.6" in model_id
+
+
+def _resolve_effort(
+    model: Model,
+    reasoning: ThinkingLevel | None,
+    effort: str | None = None,
+) -> str | None:
+    """Resolve an Anthropic effort level from explicit or simple options."""
+    if effort is not None:
+        if effort == "max" and not _supports_max_effort(model.id):
+            return "high"
+        return effort
+    if reasoning is None:
+        return None
+    if reasoning == ThinkingLevel.XHIGH:
+        return "max" if _supports_max_effort(model.id) else "high"
+    return _EFFORT_MAP.get(reasoning, "medium")
+
+
+def _adjust_budget_tokens(
+    max_tokens: int,
+    budget_tokens: int,
+) -> int:
+    """Keep manual thinking budgets valid for the requested max token limit."""
+    if max_tokens <= 0:
+        return budget_tokens
+    if budget_tokens < max_tokens:
+        return budget_tokens
+    return max(0, max_tokens - _MIN_OUTPUT_TOKENS)
+
+
+def _adjust_max_tokens_for_thinking(
+    base_max_tokens: int,
+    model_max_tokens: int,
+    reasoning: ThinkingLevel,
+) -> tuple[int, int]:
+    """Manual-thinking max-token adjustment."""
+    thinking_budget = _THINKING_BUDGETS.get(reasoning, 8192)
+    max_tokens = min(base_max_tokens + thinking_budget, model_max_tokens)
+    if max_tokens <= thinking_budget:
+        thinking_budget = max(0, max_tokens - _MIN_OUTPUT_TOKENS)
+    return max_tokens, thinking_budget
 
 
 def _resolve_thinking(
     model: Model,
     reasoning: ThinkingLevel | None,
     thinking_config: AnthropicThinkingEnabled | AnthropicThinkingAdaptive | None,
-) -> dict[str, Any] | None:
-    """Build the ``thinking`` parameter for the Anthropic API."""
-    # Explicit config takes priority
+    effort: str | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Build the ``thinking`` and ``output_config`` params for the Anthropic API."""
     if thinking_config is not None:
         if isinstance(thinking_config, AnthropicThinkingAdaptive):
-            return {"type": "adaptive", "effort": thinking_config.effort}
-        return {"type": "enabled", "budget_tokens": thinking_config.budget_tokens}
+            thinking: dict[str, Any] = {"type": "adaptive"}
+            if thinking_config.display is not None:
+                thinking["display"] = thinking_config.display
+            resolved_effort = _resolve_effort(model, None, effort or thinking_config.effort)
+            output_config = {"effort": resolved_effort} if resolved_effort is not None else None
+            return thinking, output_config
+
+        thinking = {
+            "type": "enabled",
+            "budget_tokens": thinking_config.budget_tokens,
+        }
+        if thinking_config.display is not None:
+            thinking["display"] = thinking_config.display
+        output_config = None
+        if _supports_effort(model.id):
+            resolved_effort = _resolve_effort(model, None, effort)
+            if resolved_effort is not None:
+                output_config = {"effort": resolved_effort}
+        return thinking, output_config
 
     if reasoning is None:
-        return None
+        return None, None
 
-    # Check if model supports adaptive thinking
-    model_family = "-".join(model.id.split("-")[:3])  # e.g. "claude-opus-4"
-    if model_family in _ADAPTIVE_MODELS:
-        effort = _EFFORT_MAP.get(reasoning, "medium")
-        return {"type": "adaptive", "effort": effort}
+    resolved_effort = _resolve_effort(model, reasoning, effort)
+    if _supports_adaptive_thinking(model.id):
+        thinking = {"type": "adaptive"}
+        output_config = {"effort": resolved_effort} if resolved_effort is not None else None
+        return thinking, output_config
 
-    # Budget-based thinking for older models
     budget = _THINKING_BUDGETS.get(reasoning, 8192)
-    return {"type": "enabled", "budget_tokens": budget}
+    thinking = {"type": "enabled", "budget_tokens": budget}
+    output_config = None
+    if _supports_effort(model.id) and resolved_effort is not None:
+        output_config = {"effort": resolved_effort}
+    return thinking, output_config
+
+
+def _append_beta_header(headers: dict[str, str], value: str) -> None:
+    """Append a beta header value without clobbering existing betas."""
+    existing = headers.get("anthropic-beta")
+    if not existing:
+        headers["anthropic-beta"] = value
+        return
+    values = [item.strip() for item in existing.split(",") if item.strip()]
+    if value not in values:
+        values.append(value)
+    headers["anthropic-beta"] = ",".join(values)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +257,7 @@ def _convert_assistant_content(content: list) -> list[dict[str, Any]]:
 
         elif isinstance(item, ThinkingContent):
             if item.redacted:
-                blocks.append({"type": "redacted_thinking", "data": ""})
+                blocks.append({"type": "redacted_thinking", "data": item.thinking_signature or ""})
             elif item.thinking_signature:
                 blocks.append({
                     "type": "thinking",
@@ -245,6 +341,7 @@ def _convert_tools(tools: list | None) -> list[dict[str, Any]] | None:
 
 _STOP_REASON_MAP: dict[str, StopReason] = {
     "end_turn": StopReason.STOP,
+    "pause_turn": StopReason.STOP,
     "stop_sequence": StopReason.STOP,
     "max_tokens": StopReason.LENGTH,
     "tool_use": StopReason.TOOL_USE,
@@ -292,6 +389,8 @@ def stream_anthropic(
                 extra_headers.update(model.headers)
             if options and options.headers:
                 extra_headers.update(options.headers)
+            if options and options.interleaved_thinking and not _supports_adaptive_thinking(model.id):
+                _append_beta_header(extra_headers, _INTERLEAVED_THINKING_BETA)
             if extra_headers:
                 client_kwargs["default_headers"] = extra_headers
 
@@ -317,11 +416,27 @@ def stream_anthropic(
 
             # Thinking config
             thinking_config = options.thinking if options and isinstance(options, AnthropicOptions) else None
-            thinking = _resolve_thinking(model, None, thinking_config)
+            thinking, output_config = _resolve_thinking(
+                model,
+                None,
+                thinking_config,
+                options.effort if options else None,
+            )
             if thinking:
+                if thinking.get("type") == "enabled":
+                    thinking["budget_tokens"] = _adjust_budget_tokens(
+                        params["max_tokens"],
+                        thinking["budget_tokens"],
+                    )
                 params["thinking"] = thinking
                 # Anthropic requires temperature to be unset or 1.0 with thinking
                 params.pop("temperature", None)
+            if output_config:
+                params["output_config"] = output_config
+            elif options and options.effort and _supports_effort(model.id):
+                resolved_effort = _resolve_effort(model, None, options.effort)
+                if resolved_effort is not None:
+                    params["output_config"] = {"effort": resolved_effort}
 
             # Emit start
             event_stream.push(StartEvent(partial=output))
@@ -361,21 +476,33 @@ def stream_simple_anthropic(
 
     if options is not None:
         thinking_config = None
+        effort = None
+        adjusted_max_tokens = options.max_tokens
         if options.reasoning is not None and model.reasoning:
-            thinking = _resolve_thinking(model, options.reasoning, None)
+            thinking, output_config = _resolve_thinking(model, options.reasoning, None)
             if thinking:
                 if thinking["type"] == "adaptive":
-                    thinking_config = AnthropicThinkingAdaptive(effort=thinking["effort"])
+                    thinking_config = AnthropicThinkingAdaptive()
                 else:
-                    thinking_config = AnthropicThinkingEnabled(budget_tokens=thinking["budget_tokens"])
+                    base_max_tokens = options.max_tokens or model.max_tokens
+                    adjusted_max_tokens, adjusted_budget = _adjust_max_tokens_for_thinking(
+                        base_max_tokens,
+                        model.max_tokens,
+                        options.reasoning,
+                    )
+                    thinking_config = AnthropicThinkingEnabled(budget_tokens=adjusted_budget)
+            if output_config:
+                effort = output_config.get("effort")
 
         anthropic_opts = AnthropicOptions(
             temperature=options.temperature,
-            max_tokens=options.max_tokens,
+            max_tokens=(adjusted_max_tokens if options.reasoning is not None and thinking_config and isinstance(thinking_config, AnthropicThinkingEnabled) else options.max_tokens),
             api_key=options.api_key,
             max_retry_delay_ms=options.max_retry_delay_ms,
             headers=options.headers,
             thinking=thinking_config,
+            effort=effort,
+            interleaved_thinking=(options.reasoning is not None),
         )
 
     return stream_anthropic(model, context, anthropic_opts)
@@ -442,7 +569,11 @@ def _handle_sse_event(
             ))
 
         elif block_type == "redacted_thinking":
-            content = ThinkingContent(thinking="", redacted=True)
+            content = ThinkingContent(
+                thinking="",
+                thinking_signature=getattr(block, "data", None),
+                redacted=True,
+            )
             output.content.append(content)
             stream.push(ThinkingStartEvent(
                 content_index=index, content=content, partial=output,
@@ -476,6 +607,13 @@ def _handle_sse_event(
             stream.push(ThinkingDeltaEvent(
                 content_index=index, delta=text, partial=output,
             ))
+
+        elif delta_type == "signature_delta" and block_type in ("thinking", "redacted_thinking"):
+            sig = getattr(delta, "signature", "")
+            if index < len(output.content):
+                block = output.content[index]
+                if isinstance(block, ThinkingContent):
+                    block.thinking_signature = (block.thinking_signature or "") + sig
 
         elif delta_type == "input_json_delta" and block_type == "tool_use":
             json_chunk = getattr(delta, "partial_json", "")

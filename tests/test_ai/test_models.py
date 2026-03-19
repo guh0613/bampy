@@ -26,6 +26,15 @@ class TestModelRegistry:
         assert model is not None
         assert model.api == "openai-responses"
 
+    def test_updated_model_capabilities(self):
+        gpt_54 = get_model("gpt-5.4", provider="openai")
+        haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")
+
+        assert gpt_54 is not None
+        assert gpt_54.context_window == 1_048_576
+        assert haiku is not None
+        assert haiku.reasoning is True
+
     def test_get_model_not_found(self):
         model = get_model("nonexistent-model")
         assert model is None

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -137,6 +138,24 @@ class TestMessageConversion:
         assert items[0]["role"] == "assistant"
         assert items[0]["content"] == "The answer."
 
+    def test_thinking_roundtrip_preserved_with_signature(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        ctx = Context(messages=[
+            AssistantMessage(content=[
+                ThinkingContent(
+                    thinking="deep thought",
+                    thinking_signature='{"type":"reasoning","id":"rs_123","summary":[{"type":"summary_text","text":"deep thought"}]}',
+                ),
+                TextContent(text="The answer."),
+            ]),
+        ])
+        items = _convert_messages(ctx)
+        assert items[0]["type"] == "reasoning"
+        assert items[0]["id"] == "rs_123"
+        assert items[1]["role"] == "assistant"
+        assert items[1]["content"] == "The answer."
+
     def test_user_multimodal_content(self):
         from bampy.ai.providers.openai import _convert_messages
 
@@ -188,9 +207,64 @@ class TestOpenAIOptions:
         assert opts.temperature is None
 
     def test_with_reasoning(self):
-        opts = OpenAIOptions(reasoning_effort="high", temperature=0.5)
-        assert opts.reasoning_effort == "high"
+        opts = OpenAIOptions(reasoning_effort="xhigh", temperature=0.5)
+        assert opts.reasoning_effort == "xhigh"
         assert opts.temperature == 0.5
+
+
+class TestReasoningEffortResolution:
+    def test_xhigh_supported_model(self):
+        from bampy.ai.providers.openai import _resolve_reasoning_effort
+
+        model = Model(id="gpt-5.4", name="GPT-5.4", api="openai-responses", provider="openai", reasoning=True)
+        assert _resolve_reasoning_effort(model, ThinkingLevel.XHIGH) == "xhigh"
+
+    def test_xhigh_clamped_for_unsupported_model(self):
+        from bampy.ai.providers.openai import _resolve_reasoning_effort
+
+        model = Model(id="o3", name="o3", api="openai-responses", provider="openai", reasoning=True)
+        assert _resolve_reasoning_effort(model, ThinkingLevel.XHIGH) == "high"
+
+
+class TestStreamEventHandling:
+    def test_reasoning_item_stores_signature(self):
+        from bampy.ai.providers.openai import _handle_stream_event
+        from bampy.ai.stream import AssistantMessageEventStream
+
+        output = AssistantMessage(
+            api="openai-responses",
+            provider="openai",
+            model="gpt-5.4",
+            content=[ThinkingContent(thinking="")],
+        )
+        stream = AssistantMessageEventStream()
+        event = SimpleNamespace(
+            type="response.output_item.done",
+            output_index=0,
+            item=SimpleNamespace(
+                type="reasoning",
+                summary=[SimpleNamespace(type="summary_text", text="deep thought")],
+                model_dump=lambda exclude_none=True: {
+                    "type": "reasoning",
+                    "id": "rs_123",
+                    "summary": [{"type": "summary_text", "text": "deep thought"}],
+                    "encrypted_content": "opaque",
+                },
+            ),
+        )
+
+        _handle_stream_event(
+            event,
+            output,
+            stream,
+            output_to_content={0: 0},
+            tool_json_bufs={},
+        )
+
+        thinking = output.content[0]
+        assert isinstance(thinking, ThinkingContent)
+        assert thinking.thinking == "deep thought"
+        assert thinking.thinking_signature is not None
 
 
 # ---------------------------------------------------------------------------

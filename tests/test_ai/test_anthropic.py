@@ -151,13 +151,14 @@ class TestMessageConversion:
 
         ctx = Context(messages=[
             AssistantMessage(content=[
-                ThinkingContent(thinking="", redacted=True),
+                ThinkingContent(thinking="", thinking_signature="opaque-payload", redacted=True),
                 TextContent(text="answer"),
             ]),
         ])
         _, messages = _convert_messages(ctx)
         content = messages[0]["content"]
         assert content[0]["type"] == "redacted_thinking"
+        assert content[0]["data"] == "opaque-payload"
 
     def test_image_content(self):
         from bampy.ai.providers.anthropic import _convert_messages
@@ -208,32 +209,51 @@ class TestThinkingResolution:
         from bampy.ai.providers.anthropic import _resolve_thinking
 
         model = Model(id="claude-opus-4-6", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
-        result = _resolve_thinking(model, ThinkingLevel.HIGH, None)
-        assert result == {"type": "adaptive", "effort": "high"}
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.HIGH, None)
+        assert thinking == {"type": "adaptive"}
+        assert output_config == {"effort": "high"}
 
-    def test_adaptive_for_haiku(self):
+    def test_xhigh_maps_to_max_for_opus_46(self):
         from bampy.ai.providers.anthropic import _resolve_thinking
 
-        # claude-haiku-4 family supports adaptive thinking
-        model = Model(id="claude-haiku-4-5-20251001", name="Haiku", api="anthropic-messages", provider="anthropic", reasoning=False)
-        result = _resolve_thinking(model, ThinkingLevel.MEDIUM, None)
-        assert result == {"type": "adaptive", "effort": "medium"}
+        model = Model(id="claude-opus-4-6", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.XHIGH, None)
+        assert thinking == {"type": "adaptive"}
+        assert output_config == {"effort": "max"}
+
+    def test_budget_for_haiku(self):
+        from bampy.ai.providers.anthropic import _resolve_thinking
+
+        model = Model(id="claude-haiku-4-5-20251001", name="Haiku", api="anthropic-messages", provider="anthropic", reasoning=True)
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.MEDIUM, None)
+        assert thinking == {"type": "enabled", "budget_tokens": 8192}
+        assert output_config is None
 
     def test_budget_for_older_model(self):
         from bampy.ai.providers.anthropic import _resolve_thinking
 
-        # Older model family falls back to budget-based thinking
         model = Model(id="claude-3-5-sonnet-20241022", name="Sonnet 3.5", api="anthropic-messages", provider="anthropic", reasoning=False)
-        result = _resolve_thinking(model, ThinkingLevel.MEDIUM, None)
-        assert result == {"type": "enabled", "budget_tokens": 8192}
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.MEDIUM, None)
+        assert thinking == {"type": "enabled", "budget_tokens": 8192}
+        assert output_config is None
 
     def test_explicit_config_overrides(self):
         from bampy.ai.providers.anthropic import _resolve_thinking
 
         model = Model(id="claude-opus-4-6", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
         config = AnthropicThinkingEnabled(budget_tokens=5000)
-        result = _resolve_thinking(model, ThinkingLevel.HIGH, config)
-        assert result == {"type": "enabled", "budget_tokens": 5000}
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.HIGH, config)
+        assert thinking == {"type": "enabled", "budget_tokens": 5000}
+        assert output_config is None
+
+    def test_display_and_effort_are_split_for_adaptive(self):
+        from bampy.ai.providers.anthropic import _resolve_thinking
+
+        model = Model(id="claude-sonnet-4-6", name="Sonnet", api="anthropic-messages", provider="anthropic", reasoning=True)
+        config = AnthropicThinkingAdaptive(effort="high", display="omitted")
+        thinking, output_config = _resolve_thinking(model, None, config)
+        assert thinking == {"type": "adaptive", "display": "omitted"}
+        assert output_config == {"effort": "high"}
 
 
 class TestAnthropicOptions:
@@ -243,8 +263,13 @@ class TestAnthropicOptions:
         assert opts.temperature is None
 
     def test_with_thinking(self):
-        opts = AnthropicOptions(thinking=AnthropicThinkingAdaptive(effort="high"))
-        assert opts.thinking.effort == "high"
+        opts = AnthropicOptions(
+            thinking=AnthropicThinkingAdaptive(effort="max", display="omitted"),
+            interleaved_thinking=True,
+        )
+        assert opts.thinking.effort == "max"
+        assert opts.thinking.display == "omitted"
+        assert opts.interleaved_thinking is True
 
 
 # ---------------------------------------------------------------------------

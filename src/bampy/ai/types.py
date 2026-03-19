@@ -164,6 +164,7 @@ class ThinkingLevel(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    XHIGH = "xhigh"
 
 
 class Model(BaseModel):
@@ -211,11 +212,13 @@ class SimpleStreamOptions(StreamOptions):
 class AnthropicThinkingEnabled(BaseModel):
     type: Literal["enabled"] = "enabled"
     budget_tokens: int = 8192
+    display: Literal["summarized", "omitted"] | None = None
 
 
 class AnthropicThinkingAdaptive(BaseModel):
     type: Literal["adaptive"] = "adaptive"
-    effort: Literal["low", "medium", "high"] = "medium"
+    effort: Literal["low", "medium", "high", "max"] = "medium"
+    display: Literal["summarized", "omitted"] | None = None
 
 
 AnthropicThinkingConfig = AnthropicThinkingEnabled | AnthropicThinkingAdaptive
@@ -223,11 +226,13 @@ AnthropicThinkingConfig = AnthropicThinkingEnabled | AnthropicThinkingAdaptive
 
 class AnthropicOptions(StreamOptions):
     thinking: AnthropicThinkingConfig | None = None
+    effort: Literal["low", "medium", "high", "max"] | None = None
+    interleaved_thinking: bool | None = None
     cache_retention: Literal["short", "long"] | None = None
 
 
 class OpenAIOptions(StreamOptions):
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
 
 
 class GeminiOptions(StreamOptions):

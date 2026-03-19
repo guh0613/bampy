@@ -120,6 +120,7 @@ _DEFAULT_THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.LOW: 2048,
     ThinkingLevel.MEDIUM: 8192,
     ThinkingLevel.HIGH: 16384,
+    ThinkingLevel.XHIGH: 16384,
 }
 
 

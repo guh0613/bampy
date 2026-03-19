@@ -47,11 +47,68 @@ from bampy.ai.providers._transform import sanitize_tool_call_id
 # ---------------------------------------------------------------------------
 
 _EFFORT_MAP: dict[ThinkingLevel, str] = {
-    ThinkingLevel.MINIMAL: "low",
+    ThinkingLevel.MINIMAL: "minimal",
     ThinkingLevel.LOW: "low",
     ThinkingLevel.MEDIUM: "medium",
     ThinkingLevel.HIGH: "high",
+    ThinkingLevel.XHIGH: "xhigh",
 }
+
+_XHIGH_MODEL_HINTS = (
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.3",
+    "gpt-5.4",
+)
+
+
+def _supports_xhigh(model: Model) -> bool:
+    """Return whether the target model family supports xhigh reasoning."""
+    return any(hint in model.id for hint in _XHIGH_MODEL_HINTS)
+
+
+def _resolve_reasoning_effort(
+    model: Model,
+    reasoning: ThinkingLevel | None,
+) -> str | None:
+    """Map simple reasoning levels to the provider's effort values."""
+    if reasoning is None:
+        return None
+    if reasoning == ThinkingLevel.XHIGH and not _supports_xhigh(model):
+        return "high"
+    return _EFFORT_MAP.get(reasoning, "medium")
+
+
+def _serialize_sdk_item(item: Any) -> str | None:
+    """Serialize an SDK response item so it can be round-tripped later."""
+    if item is None:
+        return None
+    if hasattr(item, "model_dump"):
+        return json.dumps(item.model_dump(exclude_none=True))
+    if isinstance(item, dict):
+        return json.dumps(item)
+    return None
+
+
+def _parse_reasoning_signature(signature: str | None) -> dict[str, Any] | None:
+    """Decode a previously stored reasoning item."""
+    if not signature:
+        return None
+    try:
+        item = json.loads(signature)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(item, dict) and item.get("type") == "reasoning":
+        return item
+    return None
+
+
+def _split_openai_tool_call_id(tool_call_id: str) -> tuple[str, str | None]:
+    """Split the composite Responses API tool-call id into call + item ids."""
+    if "|" in tool_call_id:
+        call_id, item_id = tool_call_id.split("|", 1)
+        return sanitize_tool_call_id(call_id), sanitize_tool_call_id(item_id)
+    return sanitize_tool_call_id(tool_call_id), None
 
 
 # ---------------------------------------------------------------------------
@@ -121,16 +178,22 @@ def _convert_assistant_items(
         if isinstance(block, TextContent):
             text_parts.append(block.text)
         elif isinstance(block, ThinkingContent):
-            # Responses API doesn't accept thinking blocks in input; skip
-            pass
+            if text_parts:
+                items.append({"role": "assistant", "content": "\n".join(text_parts)})
+                text_parts.clear()
+            reasoning_item = _parse_reasoning_signature(block.thinking_signature)
+            if reasoning_item is not None:
+                items.append(reasoning_item)
         elif isinstance(block, ToolCall):
             # Flush any pending text before emitting tool call items
             if text_parts:
                 items.append({"role": "assistant", "content": "\n".join(text_parts)})
                 text_parts.clear()
+            call_id, item_id = _split_openai_tool_call_id(block.id)
             items.append({
                 "type": "function_call",
-                "call_id": sanitize_tool_call_id(block.id),
+                "call_id": call_id,
+                **({"id": item_id} if item_id else {}),
                 "name": block.name,
                 "arguments": json.dumps(block.arguments),
             })
@@ -243,6 +306,7 @@ def stream_openai(
                 and options.reasoning_effort
             ):
                 params["reasoning"] = {"effort": options.reasoning_effort}
+                params["include"] = ["reasoning.encrypted_content"]
 
             # Emit start
             event_stream.push(StartEvent(partial=output))
@@ -284,9 +348,11 @@ def stream_simple_openai(
     openai_opts: OpenAIOptions | None = None
 
     if options is not None:
-        reasoning_effort = None
-        if options.reasoning is not None and model.reasoning:
-            reasoning_effort = _EFFORT_MAP.get(options.reasoning, "medium")
+        reasoning_effort = (
+            _resolve_reasoning_effort(model, options.reasoning)
+            if model.reasoning
+            else None
+        )
 
         openai_opts = OpenAIOptions(
             temperature=options.temperature,
@@ -327,8 +393,14 @@ def _handle_stream_event(
             call_id = sanitize_tool_call_id(
                 getattr(item, "call_id", "") or getattr(item, "id", f"call_{out_idx}")
             )
+            item_id = getattr(item, "id", "") or ""
             tc_name = getattr(item, "name", "")
-            tool_call = ToolCall(id=call_id, name=tc_name, arguments={})
+            tool_call_id = (
+                f"{call_id}|{sanitize_tool_call_id(item_id)}"
+                if item_id
+                else call_id
+            )
+            tool_call = ToolCall(id=tool_call_id, name=tc_name, arguments={})
             output.content.append(tool_call)
             content_idx = len(output.content) - 1
             output_to_content[out_idx] = content_idx
@@ -445,6 +517,7 @@ def _handle_stream_event(
                                 texts.append(getattr(s, "text", ""))
                         if texts:
                             block.thinking = "\n".join(texts)
+                block.thinking_signature = _serialize_sdk_item(item)
                 stream.push(ThinkingEndEvent(
                     content_index=content_idx, content=block, partial=output,
                 ))
@@ -458,16 +531,18 @@ def _handle_stream_event(
             # Usage
             usage = getattr(resp, "usage", None)
             if usage:
-                output.usage.input = getattr(usage, "input_tokens", 0)
-                output.usage.output = getattr(usage, "output_tokens", 0)
-                output.usage.total_tokens = (
-                    getattr(usage, "total_tokens", 0)
-                    or (output.usage.input + output.usage.output)
-                )
-                # Cache token tracking
+                cached_tokens = 0
                 details = getattr(usage, "input_tokens_details", None)
                 if details:
-                    output.usage.cache_read = getattr(details, "cached_tokens", 0) or 0
+                    cached_tokens = getattr(details, "cached_tokens", 0) or 0
+                total_input = getattr(usage, "input_tokens", 0)
+                output.usage.input = max(total_input - cached_tokens, 0)
+                output.usage.output = getattr(usage, "output_tokens", 0)
+                output.usage.cache_read = cached_tokens
+                output.usage.total_tokens = (
+                    getattr(usage, "total_tokens", 0)
+                    or (output.usage.input + output.usage.output + output.usage.cache_read)
+                )
 
             # Stop reason
             status = getattr(resp, "status", "completed")
