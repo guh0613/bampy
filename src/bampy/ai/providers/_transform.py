@@ -1,8 +1,4 @@
-"""Cross-provider message transformation utilities.
-
-Handles thinking block conversion, tool-call ID normalisation, and synthetic tool-result insertion
-for orphaned tool calls.
-"""
+"""Cross-provider message transformation utilities."""
 
 from __future__ import annotations
 
@@ -19,8 +15,6 @@ from bampy.ai.types import (
     UserMessage,
 )
 
-# Anthropic tool-call ID pattern
-_ANTHROPIC_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _MAX_ID_LEN = 64
 
 
@@ -90,22 +84,24 @@ def _transform_assistant_content(
 
     for block in msg.content:
         if isinstance(block, ThinkingContent):
-            if same_model:
-                # Keep thinking blocks for same model (with signature)
-                new_content.append(block)
-            elif block.redacted:
-                # Skip redacted thinking for different models
+            if block.redacted:
+                if same_model:
+                    new_content.append(block)
                 continue
+            if not block.thinking.strip() and not same_model:
+                continue
+            if same_model:
+                new_content.append(block)
             else:
-                # Convert thinking to text for different models
-                new_content.append(
-                    TextContent(text=f"<thinking>\n{block.thinking}\n</thinking>")
-                )
+                new_content.append(TextContent(text=block.thinking))
 
         elif isinstance(block, ToolCall):
             new_id = normalize_id(block.id)
             id_map[block.id] = new_id
-            new_content.append(block.model_copy(update={"id": new_id}))
+            block_update = {"id": new_id}
+            if not same_model and block.thought_signature is not None:
+                block_update["thought_signature"] = None
+            new_content.append(block.model_copy(update=block_update))
 
         else:
             new_content.append(block)
@@ -117,20 +113,26 @@ def _insert_synthetic_results(messages: list[Message]) -> list[Message]:
     """Insert synthetic ToolResultMessages for any tool calls that lack a result."""
     result: list[Message] = []
     pending_calls: list[ToolCall] = []
+    resolved_ids: set[str] = set()
 
     for msg in messages:
         if isinstance(msg, AssistantMessage):
+            if msg.stop_reason in ("error", "aborted"):
+                continue
+
             # Before adding a new assistant message, flush any orphaned calls
             for tc in pending_calls:
-                result.append(
-                    ToolResultMessage(
-                        tool_call_id=tc.id,
-                        tool_name=tc.name,
-                        content=[TextContent(text="[Tool call interrupted — no result available]")],
-                        is_error=True,
+                if tc.id not in resolved_ids:
+                    result.append(
+                        ToolResultMessage(
+                            tool_call_id=tc.id,
+                            tool_name=tc.name,
+                            content=[TextContent(text="No result provided")],
+                            is_error=True,
+                        )
                     )
-                )
             pending_calls.clear()
+            resolved_ids.clear()
 
             # Track new tool calls
             for block in msg.content:
@@ -140,32 +142,36 @@ def _insert_synthetic_results(messages: list[Message]) -> list[Message]:
 
         elif isinstance(msg, ToolResultMessage):
             # Mark this call as resolved
+            resolved_ids.add(msg.tool_call_id)
             pending_calls = [tc for tc in pending_calls if tc.id != msg.tool_call_id]
             result.append(msg)
 
         elif isinstance(msg, UserMessage):
             # User message interrupts: flush orphaned calls
             for tc in pending_calls:
-                result.append(
-                    ToolResultMessage(
-                        tool_call_id=tc.id,
-                        tool_name=tc.name,
-                        content=[TextContent(text="[Tool call interrupted by user]")],
-                        is_error=True,
+                if tc.id not in resolved_ids:
+                    result.append(
+                        ToolResultMessage(
+                            tool_call_id=tc.id,
+                            tool_name=tc.name,
+                            content=[TextContent(text="No result provided")],
+                            is_error=True,
+                        )
                     )
-                )
             pending_calls.clear()
+            resolved_ids.clear()
             result.append(msg)
 
     # Trailing orphans
     for tc in pending_calls:
-        result.append(
-            ToolResultMessage(
-                tool_call_id=tc.id,
-                tool_name=tc.name,
-                content=[TextContent(text="[Tool call interrupted — no result available]")],
-                is_error=True,
+        if tc.id not in resolved_ids:
+            result.append(
+                ToolResultMessage(
+                    tool_call_id=tc.id,
+                    tool_name=tc.name,
+                    content=[TextContent(text="No result provided")],
+                    is_error=True,
+                )
             )
-        )
 
     return result

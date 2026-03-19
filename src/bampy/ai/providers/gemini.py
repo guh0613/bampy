@@ -10,7 +10,7 @@ import base64
 from typing import Any
 
 from bampy.ai.models import calculate_cost
-from bampy.ai.provider import ApiProviderEntry
+from bampy.ai.api_registry import ApiProviderEntry
 from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
     AssistantMessage,

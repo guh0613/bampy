@@ -9,7 +9,7 @@ import asyncio
 import json
 from typing import Any
 
-from bampy.ai.provider import ApiProviderEntry
+from bampy.ai.api_registry import ApiProviderEntry
 from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
     AssistantMessage,
@@ -22,7 +22,6 @@ from bampy.ai.types import (
     SimpleStreamOptions,
     StartEvent,
     StopReason,
-    StreamOptions,
     TextContent,
     TextDeltaEvent,
     TextEndEvent,
@@ -36,9 +35,8 @@ from bampy.ai.types import (
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
-    Usage,
 )
-from bampy.ai.models import calculate_cost
+from bampy.ai.models import calculate_cost, supports_xhigh
 from bampy.ai.providers._transform import sanitize_tool_call_id
 
 
@@ -54,19 +52,6 @@ _EFFORT_MAP: dict[ThinkingLevel, str] = {
     ThinkingLevel.XHIGH: "xhigh",
 }
 
-_XHIGH_MODEL_HINTS = (
-    "gpt-5.1-codex-max",
-    "gpt-5.2",
-    "gpt-5.3",
-    "gpt-5.4",
-)
-
-
-def _supports_xhigh(model: Model) -> bool:
-    """Return whether the target model family supports xhigh reasoning."""
-    return any(hint in model.id for hint in _XHIGH_MODEL_HINTS)
-
-
 def _resolve_reasoning_effort(
     model: Model,
     reasoning: ThinkingLevel | None,
@@ -74,7 +59,7 @@ def _resolve_reasoning_effort(
     """Map simple reasoning levels to the provider's effort values."""
     if reasoning is None:
         return None
-    if reasoning == ThinkingLevel.XHIGH and not _supports_xhigh(model):
+    if reasoning == ThinkingLevel.XHIGH and not supports_xhigh(model):
         return "high"
     return _EFFORT_MAP.get(reasoning, "medium")
 

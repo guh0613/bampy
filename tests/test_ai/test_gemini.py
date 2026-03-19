@@ -49,7 +49,8 @@ _BASE_URL = os.environ.get("GEMINI_BASE_URL", "")
 # Default model for live tests
 _TEST_MODEL = "gemini-3.1-flash-lite-preview"
 
-live = pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY not set")
+live = pytest.mark.live
+requires_live_api = pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY not set")
 
 
 def _model(model_id: str = _TEST_MODEL) -> Model:
@@ -272,6 +273,7 @@ class TestGeminiOptions:
 
 
 @live
+@requires_live_api
 class TestLiveStreaming:
     """Integration tests that hit the real Gemini API."""
 
@@ -353,6 +355,7 @@ class TestLiveStreaming:
 
 
 @live
+@requires_live_api
 class TestLiveThinking:
     """Tests for thinking/reasoning support (uses a reasoning-capable model)."""
 
@@ -405,6 +408,7 @@ class TestLiveThinking:
 
 
 @live
+@requires_live_api
 class TestLiveToolCalling:
     """Tests for function calling / tool use."""
 
@@ -502,6 +506,7 @@ class TestLiveToolCalling:
 
 
 @live
+@requires_live_api
 class TestLiveUsage:
     """Tests for usage/token tracking."""
 
@@ -535,6 +540,7 @@ class TestLiveUsage:
 
 
 @live
+@requires_live_api
 class TestLiveErrorHandling:
     """Tests for error scenarios."""
 

@@ -6,6 +6,7 @@ from bampy.ai.providers._transform import (
 )
 from bampy.ai.types import (
     AssistantMessage,
+    StopReason,
     TextContent,
     ThinkingContent,
     ToolCall,
@@ -57,7 +58,7 @@ class TestTransformMessages:
         msg = result[0]
         assert isinstance(msg, AssistantMessage)
         assert isinstance(msg.content[0], TextContent)
-        assert "<thinking>" in msg.content[0].text
+        assert msg.content[0].text == "reasoning here"
 
     def test_redacted_thinking_skipped_for_different_model(self):
         messages = [
@@ -144,3 +145,47 @@ class TestTransformMessages:
         tr = result[1]
         assert isinstance(tr, ToolResultMessage)
         assert "@" not in tr.tool_call_id
+
+    def test_cross_model_tool_call_drops_thought_signature(self):
+        messages = [
+            AssistantMessage(
+                api="google-genai",
+                provider="google",
+                model="gemini-3-flash-preview",
+                content=[
+                    ToolCall(
+                        id="call_1",
+                        name="search",
+                        arguments={},
+                        thought_signature=b"opaque",
+                    )
+                ],
+            ),
+        ]
+        result = transform_messages(
+            messages,
+            target_model="claude-sonnet-4-6",
+            target_provider="anthropic",
+            target_api="anthropic-messages",
+        )
+        msg = result[0]
+        assert isinstance(msg, AssistantMessage)
+        tool_call = msg.content[0]
+        assert isinstance(tool_call, ToolCall)
+        assert tool_call.thought_signature is None
+
+    def test_error_assistant_message_skipped(self):
+        messages = [
+            AssistantMessage(
+                api="test",
+                provider="test",
+                model="test",
+                stop_reason=StopReason.ERROR,
+                error_message="boom",
+                content=[TextContent(text="partial")],
+            ),
+            UserMessage(content="retry"),
+        ]
+        result = transform_messages(messages)
+        assert len(result) == 1
+        assert isinstance(result[0], UserMessage)

@@ -9,7 +9,7 @@ import asyncio
 import json
 from typing import Any
 
-from bampy.ai.provider import ApiProviderEntry
+from bampy.ai.api_registry import ApiProviderEntry
 from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
     AnthropicOptions,
@@ -24,7 +24,6 @@ from bampy.ai.types import (
     SimpleStreamOptions,
     StartEvent,
     StopReason,
-    StreamOptions,
     TextContent,
     TextDeltaEvent,
     TextEndEvent,
@@ -38,8 +37,6 @@ from bampy.ai.types import (
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
-    Usage,
-    UsageCost,
 )
 from bampy.ai.models import calculate_cost
 from bampy.ai.providers._transform import sanitize_tool_call_id

@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError, create_model
 
+from bampy.ai.types import Tool, ToolCall
+
 
 def validate_tool_arguments(
     arguments: dict[str, Any],
@@ -27,6 +29,21 @@ def validate_tool_arguments(
         return instance.model_dump()
     except (ValidationError, Exception) as exc:
         raise ToolValidationError(str(exc), arguments=arguments, schema=schema) from exc
+
+
+def validate_tool_call(
+    tools: list[Tool],
+    tool_call: ToolCall,
+) -> dict[str, Any]:
+    """Validate a tool call against the matching tool schema."""
+    tool = next((tool for tool in tools if tool.name == tool_call.name), None)
+    if tool is None:
+        raise ToolValidationError(
+            f'Tool "{tool_call.name}" not found',
+            arguments=tool_call.arguments,
+            schema={},
+        )
+    return validate_tool_arguments(tool_call.arguments, tool.parameters)
 
 
 class ToolValidationError(Exception):

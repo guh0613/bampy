@@ -1,12 +1,16 @@
 """Tests for bampy.ai.models."""
 
+import pytest
+
 from bampy.ai.models import (
     MODELS,
     calculate_cost,
     get_model,
     get_models,
     get_providers,
+    models_are_equal,
     register_model,
+    supports_xhigh,
     _model_map,
 )
 from bampy.ai.types import Model, ModelCost, Usage
@@ -29,11 +33,14 @@ class TestModelRegistry:
     def test_updated_model_capabilities(self):
         gpt_54 = get_model("gpt-5.4", provider="openai")
         haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")
+        gpt_52 = get_model("gpt-5.2", provider="openai")
 
         assert gpt_54 is not None
-        assert gpt_54.context_window == 1_048_576
+        assert gpt_54.context_window == 272_000
         assert haiku is not None
         assert haiku.reasoning is True
+        assert gpt_52 is not None
+        assert gpt_52.max_tokens == 128_000
 
     def test_get_model_not_found(self):
         model = get_model("nonexistent-model")
@@ -51,6 +58,7 @@ class TestModelRegistry:
         providers = get_providers()
         assert "anthropic" in providers
         assert "openai" in providers
+        assert "google" in providers
 
     def test_register_custom_model(self):
         custom = Model(
@@ -81,6 +89,22 @@ class TestCostCalculation:
         assert cost.input == pytest.approx(3.0 * 1000 / 1_000_000)
         assert cost.output == pytest.approx(15.0 * 500 / 1_000_000)
         assert cost.total == pytest.approx(cost.input + cost.output + cost.cache_read + cost.cache_write)
+        assert cost is not usage.cost
+
+    def test_calculate_cost_does_not_mutate_usage(self):
+        model = Model(
+            id="test",
+            name="Test",
+            api="test",
+            provider="test",
+            cost=ModelCost(input=3.0, output=15.0, cache_read=0.3, cache_write=3.75),
+        )
+        usage = Usage(input=1000, output=500, cache_read=200, cache_write=100)
+        original_cost = usage.cost.model_copy(deep=True)
+
+        calculate_cost(model, usage)
+
+        assert usage.cost == original_cost
 
     def test_zero_usage(self):
         model = Model(id="t", name="T", api="t", provider="t")
@@ -89,4 +113,14 @@ class TestCostCalculation:
         assert cost.total == 0.0
 
 
-import pytest
+class TestModelHelpers:
+    def test_supports_xhigh(self):
+        model = get_model("gpt-5.4", provider="openai")
+        assert supports_xhigh(model) is True
+
+    def test_models_are_equal(self):
+        a = get_model("gpt-5.4", provider="openai")
+        b = get_model("gpt-5.4", provider="openai")
+        c = get_model("claude-sonnet-4-6", provider="anthropic")
+        assert models_are_equal(a, b) is True
+        assert models_are_equal(a, c) is False

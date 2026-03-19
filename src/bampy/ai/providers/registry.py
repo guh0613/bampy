@@ -1,29 +1,51 @@
-"""Built-in provider registration with lazy loading.
-
-"""
+"""Built-in provider registration."""
 
 from __future__ import annotations
 
-from bampy.ai.provider import ApiProviderEntry, register_api_provider
+from bampy.ai.api_registry import (
+    ApiProviderEntry,
+    register_api_provider,
+    unregister_api_providers,
+)
+
+_BUILTIN_SOURCE_ID = "bampy.ai.providers.builtin"
 
 
-async def _load_anthropic() -> ApiProviderEntry:
+def _load_anthropic() -> ApiProviderEntry:
     from bampy.ai.providers.anthropic import get_provider_entry
+
     return get_provider_entry()
 
 
-async def _load_openai() -> ApiProviderEntry:
+def _load_openai() -> ApiProviderEntry:
     from bampy.ai.providers.openai import get_provider_entry
+
     return get_provider_entry()
 
 
-async def _load_google() -> ApiProviderEntry:
+def _load_google() -> ApiProviderEntry:
     from bampy.ai.providers.gemini import get_provider_entry
+
     return get_provider_entry()
 
 
-def register_builtin_providers() -> None:
+def register_builtin_providers(*, force: bool = False) -> None:
     """Register all built-in LLM providers (lazy-loaded)."""
-    register_api_provider("anthropic-messages", loader=_load_anthropic)
-    register_api_provider("openai-responses", loader=_load_openai)
-    register_api_provider("google-genai", loader=_load_google)
+    if force:
+        unregister_api_providers(_BUILTIN_SOURCE_ID)
+
+    register_api_provider(
+        "anthropic-messages",
+        loader=_load_anthropic,
+        source_id=_BUILTIN_SOURCE_ID,
+    )
+    register_api_provider(
+        "openai-responses",
+        loader=_load_openai,
+        source_id=_BUILTIN_SOURCE_ID,
+    )
+    register_api_provider(
+        "google-genai",
+        loader=_load_google,
+        source_id=_BUILTIN_SOURCE_ID,
+    )

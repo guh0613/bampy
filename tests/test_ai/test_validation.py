@@ -7,7 +7,9 @@ from bampy.ai.validation import (
     parse_partial_json,
     schema_from_model,
     validate_tool_arguments,
+    validate_tool_call,
 )
+from bampy.ai.types import Tool, ToolCall
 from pydantic import BaseModel
 
 
@@ -48,6 +50,22 @@ class TestValidateToolArguments:
         }
         with pytest.raises(ToolValidationError):
             validate_tool_arguments({}, schema)
+
+    def test_validate_tool_call(self):
+        tools = [
+            Tool(
+                name="search",
+                description="Search",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            )
+        ]
+        tool_call = ToolCall(id="call_1", name="search", arguments={"query": "hello"})
+        result = validate_tool_call(tools, tool_call)
+        assert result == {"query": "hello"}
 
 
 class TestSchemaFromModel:

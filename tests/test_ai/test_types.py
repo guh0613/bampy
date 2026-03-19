@@ -1,6 +1,5 @@
 """Tests for bampy.ai.types."""
 
-import pytest
 from pydantic import TypeAdapter
 
 from bampy.ai.types import (
@@ -8,7 +7,6 @@ from bampy.ai.types import (
     AssistantMessageEvent,
     Context,
     DoneEvent,
-    ErrorEvent,
     ImageContent,
     Message,
     Model,
@@ -16,17 +14,14 @@ from bampy.ai.types import (
     SimpleStreamOptions,
     StartEvent,
     StopReason,
-    StreamOptions,
     TextContent,
     TextDeltaEvent,
     ThinkingContent,
     ThinkingLevel,
     Tool,
     ToolCall,
-    ToolCallStartEvent,
     ToolResultMessage,
     Usage,
-    UsageCost,
     UserMessage,
 )
 

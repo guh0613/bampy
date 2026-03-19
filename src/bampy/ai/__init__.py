@@ -1,6 +1,31 @@
-"""bampy.ai - LLM provider abstraction layer."""
+"""Public surface for the bampy AI layer."""
 
+from bampy.ai.models import (
+    BUILTIN_MODELS,
+    MODELS,
+    calculate_cost,
+    get_model,
+    get_models,
+    get_providers,
+    models_are_equal,
+    register_model,
+    supports_xhigh,
+)
+from bampy.ai.providers.registry import register_builtin_providers
+from bampy.ai.stream import (
+    AssistantMessageEventStream,
+    EventStream,
+    complete,
+    complete_simple,
+    ensure_builtin_providers_registered,
+    stream,
+    stream_simple,
+)
 from bampy.ai.types import (
+    AnthropicOptions,
+    AnthropicThinkingAdaptive,
+    AnthropicThinkingConfig,
+    AnthropicThinkingEnabled,
     AssistantMessage,
     AssistantMessageEvent,
     Context,
@@ -9,6 +34,7 @@ from bampy.ai.types import (
     Message,
     Model,
     ModelCost,
+    OpenAIOptions,
     SimpleStreamOptions,
     StopReason,
     StreamOptions,
@@ -22,19 +48,32 @@ from bampy.ai.types import (
     UsageCost,
     UserMessage,
 )
-from bampy.ai.stream import AssistantMessageEventStream, EventStream
+from bampy.ai.validation import (
+    ToolValidationError,
+    parse_partial_json,
+    schema_from_model,
+    validate_tool_arguments,
+    validate_tool_call,
+)
 
 __all__ = [
+    "AnthropicOptions",
+    "AnthropicThinkingAdaptive",
+    "AnthropicThinkingConfig",
+    "AnthropicThinkingEnabled",
     "AssistantMessage",
     "AssistantMessageEvent",
     "AssistantMessageEventStream",
+    "BUILTIN_MODELS",
     "Context",
     "EventStream",
     "GeminiOptions",
     "ImageContent",
+    "MODELS",
     "Message",
     "Model",
     "ModelCost",
+    "OpenAIOptions",
     "SimpleStreamOptions",
     "StopReason",
     "StreamOptions",
@@ -44,7 +83,25 @@ __all__ = [
     "Tool",
     "ToolCall",
     "ToolResultMessage",
+    "ToolValidationError",
     "Usage",
     "UsageCost",
     "UserMessage",
+    "calculate_cost",
+    "complete",
+    "complete_simple",
+    "ensure_builtin_providers_registered",
+    "get_model",
+    "get_models",
+    "get_providers",
+    "models_are_equal",
+    "parse_partial_json",
+    "register_builtin_providers",
+    "register_model",
+    "schema_from_model",
+    "stream",
+    "stream_simple",
+    "supports_xhigh",
+    "validate_tool_arguments",
+    "validate_tool_call",
 ]

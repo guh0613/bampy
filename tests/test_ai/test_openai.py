@@ -50,7 +50,8 @@ _BASE_URL = os.environ.get("GPT_BASE_URL", "")
 # Default model for live tests
 _TEST_MODEL = "gpt-5.4-mini"
 
-live = pytest.mark.skipif(not _API_KEY, reason="GPT_API_KEY not set")
+live = pytest.mark.live
+requires_live_api = pytest.mark.skipif(not _API_KEY, reason="GPT_API_KEY not set")
 
 
 def _model(model_id: str = _TEST_MODEL) -> Model:
@@ -273,6 +274,7 @@ class TestStreamEventHandling:
 
 
 @live
+@requires_live_api
 class TestLiveStreaming:
     """Integration tests that hit the real OpenAI API."""
 
@@ -354,6 +356,7 @@ class TestLiveStreaming:
 
 
 @live
+@requires_live_api
 class TestLiveReasoning:
     """Tests for reasoning/thinking support."""
 
@@ -375,6 +378,7 @@ class TestLiveReasoning:
 
 
 @live
+@requires_live_api
 class TestLiveToolCalling:
     """Tests for function calling / tool use."""
 
@@ -471,6 +475,7 @@ class TestLiveToolCalling:
 
 
 @live
+@requires_live_api
 class TestLiveUsage:
     """Tests for usage/token tracking."""
 
@@ -504,6 +509,7 @@ class TestLiveUsage:
 
 
 @live
+@requires_live_api
 class TestLiveErrorHandling:
     """Tests for error scenarios."""
 

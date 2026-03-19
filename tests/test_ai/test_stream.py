@@ -1,16 +1,28 @@
 """Tests for bampy.ai.stream."""
 
 import asyncio
+import importlib
 
 import pytest
 
-from bampy.ai.stream import AssistantMessageEventStream, EventStream
+from bampy.ai.api_registry import ApiProviderEntry, clear_api_providers, register_api_provider
+from bampy.ai.stream import (
+    AssistantMessageEventStream,
+    EventStream,
+    complete,
+    complete_simple,
+    stream,
+    stream_simple,
+)
 from bampy.ai.types import (
     AssistantMessage,
+    Context,
     DoneEvent,
     ErrorEvent,
+    Model,
     StartEvent,
     StopReason,
+    StreamOptions,
     TextContent,
     TextDeltaEvent,
     TextEndEvent,
@@ -143,3 +155,102 @@ class TestAssistantMessageEventStream:
 
         result = await stream.result()
         assert result.stop_reason == StopReason.ERROR
+
+
+@pytest.fixture
+def provider_registry():
+    from bampy.ai.api_registry import _registry
+
+    saved = dict(_registry)
+    clear_api_providers()
+    yield
+    clear_api_providers()
+    _registry.update(saved)
+
+
+def _make_dummy_stream(model, context, options=None):
+    output = AssistantMessage(api=model.api, provider=model.provider, model=model.id)
+    event_stream = AssistantMessageEventStream()
+    event_stream.push(DoneEvent(reason=StopReason.STOP, message=output))
+    return event_stream
+
+
+class TestTopLevelStreamFunctions:
+    def test_stream_registers_builtins_lazily(self, provider_registry, monkeypatch):
+        calls = {"count": 0}
+
+        def fake_register_builtin_providers():
+            calls["count"] += 1
+            register_api_provider(
+                "lazy-api",
+                entry=ApiProviderEntry(
+                    api="lazy-api",
+                    stream=_make_dummy_stream,
+                    stream_simple=_make_dummy_stream,
+                ),
+            )
+
+        stream_module = importlib.import_module("bampy.ai.stream")
+        monkeypatch.setattr(
+            stream_module,
+            "register_builtin_providers",
+            fake_register_builtin_providers,
+        )
+
+        model = Model(id="test", name="Test", api="lazy-api", provider="test")
+        result_stream = stream(model, Context())
+
+        assert isinstance(result_stream, AssistantMessageEventStream)
+        assert calls["count"] == 1
+
+    def test_stream_uses_registered_provider(self, provider_registry):
+        register_api_provider(
+            "test-api",
+            entry=ApiProviderEntry(
+                api="test-api",
+                stream=_make_dummy_stream,
+                stream_simple=_make_dummy_stream,
+            ),
+        )
+        model = Model(id="test", name="Test", api="test-api", provider="test")
+        result_stream = stream(model, Context(), StreamOptions())
+        assert isinstance(result_stream, AssistantMessageEventStream)
+
+    async def test_complete_returns_result(self, provider_registry):
+        register_api_provider(
+            "test-api",
+            entry=ApiProviderEntry(
+                api="test-api",
+                stream=_make_dummy_stream,
+                stream_simple=_make_dummy_stream,
+            ),
+        )
+        model = Model(id="test", name="Test", api="test-api", provider="test")
+        result = await complete(model, Context())
+        assert result.model == "test"
+
+    async def test_complete_simple_returns_result(self, provider_registry):
+        register_api_provider(
+            "test-api",
+            entry=ApiProviderEntry(
+                api="test-api",
+                stream=_make_dummy_stream,
+                stream_simple=_make_dummy_stream,
+            ),
+        )
+        model = Model(id="test", name="Test", api="test-api", provider="test")
+        result = await complete_simple(model, Context())
+        assert result.model == "test"
+
+    def test_stream_simple_uses_registered_provider(self, provider_registry):
+        register_api_provider(
+            "test-api",
+            entry=ApiProviderEntry(
+                api="test-api",
+                stream=_make_dummy_stream,
+                stream_simple=_make_dummy_stream,
+            ),
+        )
+        model = Model(id="test", name="Test", api="test-api", provider="test")
+        result_stream = stream_simple(model, Context())
+        assert isinstance(result_stream, AssistantMessageEventStream)
