@@ -5,11 +5,11 @@ Maps Google GenAI SDK streaming events → bampy AssistantMessageEvent protocol.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from typing import Any
 
 from bampy.ai.models import calculate_cost
+from bampy.ai.providers._cancellation import spawn_provider_task
 from bampy.ai.api_registry import ApiProviderEntry
 from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
@@ -221,6 +221,12 @@ def stream_gemini(
 ) -> AssistantMessageEventStream:
     """Stream a Gemini API response with fine-grained events."""
     event_stream = AssistantMessageEventStream()
+    output = AssistantMessage(
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        content=[],
+    )
 
     async def _run() -> None:
         try:
@@ -229,13 +235,6 @@ def stream_gemini(
         except ImportError as e:
             _emit_error(event_stream, model, f"google-genai SDK not installed: {e}")
             return
-
-        output = AssistantMessage(
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            content=[],
-        )
 
         try:
             # Build client
@@ -469,7 +468,12 @@ def stream_gemini(
             event_stream.push(ErrorEvent(reason=StopReason.ERROR, error=output))
             event_stream.end(output)
 
-    asyncio.get_running_loop().create_task(_run())
+    spawn_provider_task(
+        event_stream=event_stream,
+        output=output,
+        options=options,
+        runner=_run,
+    )
     return event_stream
 
 
@@ -492,6 +496,7 @@ def stream_simple_gemini(
             api_key=options.api_key,
             max_retry_delay_ms=options.max_retry_delay_ms,
             headers=options.headers,
+            cancellation=options.cancellation,
             thinking_budget=thinking_budget,
         )
 

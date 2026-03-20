@@ -201,6 +201,7 @@ class StreamOptions(BaseModel):
     api_key: str | None = None
     max_retry_delay_ms: int = 60_000
     headers: dict[str, str] | None = None
+    cancellation: Any = Field(default=None, exclude=True, repr=False)
 
 
 class SimpleStreamOptions(StreamOptions):

@@ -43,6 +43,7 @@ class EventStream(Generic[T, R]):
         self._extract_result = extract_result
         self._ended = False
         self._stored_result: R | None = None
+        self._stored_exception: BaseException | None = None
         # Lazy future — created on first access so the stream can be
         # instantiated before the event loop is running.
         self._result_future: asyncio.Future[R] | None = None
@@ -65,16 +66,17 @@ class EventStream(Generic[T, R]):
             return
         self._ended = True
         self._stored_result = result
+        self._stored_exception = None
         self._queue.put_nowait(_SENTINEL)
         if self._result_future is not None and not self._result_future.done():
-            if result is not None:
-                self._result_future.set_result(result)
+            self._result_future.set_result(result)  # type: ignore[arg-type]
 
     def error(self, exc: BaseException) -> None:
         """Signal an error and terminate the stream."""
         if self._ended:
             return
         self._ended = True
+        self._stored_exception = exc
         self._queue.put_nowait(_SENTINEL)
         if self._result_future is not None and not self._result_future.done():
             self._result_future.set_exception(exc)
@@ -102,8 +104,11 @@ class EventStream(Generic[T, R]):
             loop = asyncio.get_running_loop()
             self._result_future = loop.create_future()
             # If end() was already called before anyone awaited result()
-            if self._ended and self._stored_result is not None:
-                self._result_future.set_result(self._stored_result)
+            if self._ended:
+                if self._stored_exception is not None:
+                    self._result_future.set_exception(self._stored_exception)
+                else:
+                    self._result_future.set_result(self._stored_result)  # type: ignore[arg-type]
         return self._result_future
 
 

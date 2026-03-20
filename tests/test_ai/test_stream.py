@@ -81,6 +81,28 @@ class TestEventStream:
         result = await stream.result()
         assert result == "final"
 
+    async def test_end_with_none_before_result_await(self):
+        stream: EventStream[str, None] = EventStream()
+        stream.push("a")
+        stream.end(None)
+
+        async for _ in stream:
+            pass
+
+        result = await stream.result()
+        assert result is None
+
+    async def test_error_before_result_await(self):
+        stream: EventStream[str, str] = EventStream()
+        stream.push("a")
+        stream.error(RuntimeError("boom"))
+
+        async for _ in stream:
+            pass
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await stream.result()
+
     async def test_concurrent_producer_consumer(self):
         stream: EventStream[int, int] = EventStream()
         received: list[int] = []

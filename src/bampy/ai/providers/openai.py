@@ -5,7 +5,6 @@ Maps OpenAI Responses API streaming events -> bampy AssistantMessageEvent protoc
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -37,6 +36,7 @@ from bampy.ai.types import (
     ToolCallStartEvent,
 )
 from bampy.ai.models import calculate_cost, supports_xhigh
+from bampy.ai.providers._cancellation import spawn_provider_task
 from bampy.ai.providers._transform import sanitize_tool_call_id
 
 
@@ -225,6 +225,12 @@ def stream_openai(
 ) -> AssistantMessageEventStream:
     """Stream an OpenAI Responses API response with fine-grained events."""
     event_stream = AssistantMessageEventStream()
+    output = AssistantMessage(
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        content=[],
+    )
 
     async def _run() -> None:
         try:
@@ -232,13 +238,6 @@ def stream_openai(
         except ImportError as e:
             _emit_error(event_stream, model, f"openai SDK not installed: {e}")
             return
-
-        output = AssistantMessage(
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            content=[],
-        )
 
         try:
             # Build client
@@ -320,7 +319,12 @@ def stream_openai(
             event_stream.push(ErrorEvent(reason=StopReason.ERROR, error=output))
             event_stream.end(output)
 
-    asyncio.get_running_loop().create_task(_run())
+    spawn_provider_task(
+        event_stream=event_stream,
+        output=output,
+        options=options,
+        runner=_run,
+    )
     return event_stream
 
 
@@ -345,6 +349,7 @@ def stream_simple_openai(
             api_key=options.api_key,
             max_retry_delay_ms=options.max_retry_delay_ms,
             headers=options.headers,
+            cancellation=options.cancellation,
             reasoning_effort=reasoning_effort,
         )
 
