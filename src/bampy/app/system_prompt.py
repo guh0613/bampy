@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .skills import Skill, format_skills_for_prompt
+
 
 @dataclass(slots=True)
 class ContextFile:
@@ -31,6 +33,7 @@ class BuildSystemPromptOptions:
     append_system_prompt: str | None = None
     cwd: str | None = None
     context_files: list[ContextFile] | None = None
+    skills: list[Skill] | None = None
 
 
 # Default tool descriptions
@@ -55,6 +58,7 @@ def build_system_prompt(options: BuildSystemPromptOptions | None = None) -> str:
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     append_section = f"\n\n{options.append_system_prompt}" if options.append_system_prompt else ""
     context_files = options.context_files or []
+    skills = options.skills or []
 
     # Custom prompt mode
     if options.custom_prompt:
@@ -65,6 +69,8 @@ def build_system_prompt(options: BuildSystemPromptOptions | None = None) -> str:
             prompt += "\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n"
             for cf in context_files:
                 prompt += f"## {cf.path}\n\n{cf.content}\n\n"
+        if (not options.selected_tools or "read" in options.selected_tools) and skills:
+            prompt += format_skills_for_prompt(skills)
         prompt += f"\nCurrent date: {date}"
         prompt += f"\nCurrent working directory: {prompt_cwd}"
         return prompt
@@ -137,6 +143,9 @@ Guidelines:
         prompt += "\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n"
         for cf in context_files:
             prompt += f"## {cf.path}\n\n{cf.content}\n\n"
+
+    if has_read and skills:
+        prompt += format_skills_for_prompt(skills)
 
     prompt += f"\nCurrent date: {date}"
     prompt += f"\nCurrent working directory: {prompt_cwd}"

@@ -10,6 +10,7 @@ from bampy.app.system_prompt import (
     build_system_prompt,
     load_context_files,
 )
+from bampy.app.skills import Skill
 
 
 class TestBuildSystemPrompt:
@@ -55,6 +56,53 @@ class TestBuildSystemPrompt:
         )
 
         assert "Available tools:\n(none)" in prompt
+
+    def test_prompt_appends_visible_skills_when_read_is_available(self):
+        prompt = build_system_prompt(
+            BuildSystemPromptOptions(
+                selected_tools=["read", "bash"],
+                skills=[
+                    Skill(
+                        name="docs-search",
+                        description="Search docs when the task needs product or API documentation.",
+                        file_path="/skills/docs-search/SKILL.md",
+                        base_dir="/skills/docs-search",
+                        source="project",
+                    ),
+                    Skill(
+                        name="manual-only",
+                        description="Only invoked manually.",
+                        file_path="/skills/manual-only/SKILL.md",
+                        base_dir="/skills/manual-only",
+                        source="project",
+                        disable_model_invocation=True,
+                    ),
+                ],
+            )
+        )
+
+        assert "<available_skills>" in prompt
+        assert "<name>docs-search</name>" in prompt
+        assert "manual-only" not in prompt
+
+    def test_custom_prompt_skips_skills_when_read_is_not_available(self):
+        prompt = build_system_prompt(
+            BuildSystemPromptOptions(
+                custom_prompt="Base prompt",
+                selected_tools=["bash"],
+                skills=[
+                    Skill(
+                        name="docs-search",
+                        description="Search docs when the task needs product or API documentation.",
+                        file_path="/skills/docs-search/SKILL.md",
+                        base_dir="/skills/docs-search",
+                        source="project",
+                    )
+                ],
+            )
+        )
+
+        assert "<available_skills>" not in prompt
 
 
 class TestLoadContextFiles:

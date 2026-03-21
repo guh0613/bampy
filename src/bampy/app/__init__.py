@@ -148,3 +148,14 @@ from .system_prompt import (
     build_system_prompt,
     load_context_files,
 )
+
+# Skills
+from .skills import (
+    Skill,
+    SkillCollision,
+    SkillDiagnostic,
+    LoadSkillsResult,
+    load_skills,
+    load_skills_from_dir,
+    format_skills_for_prompt,
+)
