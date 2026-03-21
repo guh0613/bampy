@@ -260,7 +260,9 @@ def find_cut_point(
         return CutPointResult(first_kept_entry_index=start)
 
     accumulated = 0
-    cut_index = cut_points[0]
+    # If the full history still fits inside keep_recent_tokens (common for manual
+    # compaction on short sessions), keep only the tail and summarize the rest.
+    cut_index = cut_points[-1]
 
     for i in range(end - 1, start - 1, -1):
         entry = entries[i]
@@ -496,7 +498,7 @@ async def generate_summary(
     current_messages: list[Any],
     model: Any,
     reserve_tokens: int,
-    api_key: str,
+    api_key: str | None,
     custom_instructions: str | None = None,
     previous_summary: str | None = None,
     cancellation: Any | None = None,
@@ -547,7 +549,7 @@ async def generate_turn_prefix_summary(
     current_messages: list[Any],
     model: Any,
     reserve_tokens: int,
-    api_key: str,
+    api_key: str | None,
     cancellation: Any | None = None,
 ) -> str:
     """Generate a compact summary for the prefix of a split turn."""
@@ -582,7 +584,7 @@ async def generate_turn_prefix_summary(
 async def compact(
     preparation: CompactionPreparation,
     model: Any,
-    api_key: str,
+    api_key: str | None,
     custom_instructions: str | None = None,
     cancellation: Any | None = None,
 ) -> CompactionResult:

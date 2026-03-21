@@ -131,6 +131,38 @@ class TestCutPointsAndPreparation:
         assert result.turn_start_index == 2
         assert result.is_split_turn is True
 
+    def test_find_cut_point_prefers_tail_when_history_is_shorter_than_keep_recent(self):
+        entries = [
+            _message_entry("u1", None, UserMessage(content="first")),
+            _message_entry(
+                "a1",
+                "u1",
+                AssistantMessage(
+                    api="test",
+                    provider="test",
+                    model="model-a",
+                    content=[TextContent(text="reply one")],
+                ),
+            ),
+            _message_entry("u2", "a1", UserMessage(content="second")),
+            _message_entry(
+                "a2",
+                "u2",
+                AssistantMessage(
+                    api="test",
+                    provider="test",
+                    model="model-a",
+                    content=[TextContent(text="reply two")],
+                ),
+            ),
+        ]
+
+        result = find_cut_point(entries, 0, len(entries), keep_recent_tokens=10_000)
+
+        assert result.first_kept_entry_index == 3
+        assert result.turn_start_index == 2
+        assert result.is_split_turn is True
+
     def test_prepare_compaction_captures_previous_summary_and_prefix(self):
         previous = CompactionEntry(
             id="c1",
@@ -181,6 +213,48 @@ class TestCutPointsAndPreparation:
             for msg in preparation.turn_prefix_messages
         ] == ["user"]
         assert preparation.tokens_before > 0
+
+    def test_prepare_compaction_summarizes_short_history_for_manual_compaction(self):
+        entries = [
+            _message_entry("u1", None, UserMessage(content="first request")),
+            _message_entry(
+                "a1",
+                "u1",
+                AssistantMessage(
+                    api="test",
+                    provider="test",
+                    model="model-a",
+                    content=[TextContent(text="first answer")],
+                ),
+            ),
+            _message_entry("u2", "a1", UserMessage(content="second request")),
+            _message_entry(
+                "a2",
+                "u2",
+                AssistantMessage(
+                    api="test",
+                    provider="test",
+                    model="model-a",
+                    content=[TextContent(text="second answer")],
+                ),
+            ),
+        ]
+
+        preparation = prepare_compaction(
+            entries,
+            CompactionSettings(keep_recent_tokens=10_000, reserve_tokens=32),
+        )
+
+        assert preparation is not None
+        assert [
+            msg.get("role") if isinstance(msg, dict) else msg.role
+            for msg in preparation.messages_to_summarize
+        ] == ["user", "assistant"]
+        assert [
+            msg.get("role") if isinstance(msg, dict) else msg.role
+            for msg in preparation.turn_prefix_messages
+        ] == ["user"]
+        assert preparation.first_kept_entry_id == "a2"
 
 
 class TestCompact:

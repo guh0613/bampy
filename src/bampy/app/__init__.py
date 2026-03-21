@@ -159,3 +159,13 @@ from .skills import (
     load_skills_from_dir,
     format_skills_for_prompt,
 )
+
+# Runtime orchestration
+from .runtime import (
+    AgentSession,
+    AgentSessionEvent,
+    AutoCompactionEndEvent,
+    AutoCompactionStartEvent,
+    CreateAgentSessionResult,
+    create_agent_session,
+)
