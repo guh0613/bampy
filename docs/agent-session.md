@@ -58,6 +58,8 @@ await session.start()
 | `cwd` | `str \| None` | 当前目录 | 工作目录 |
 | `model` | `Model \| None` | 自动选择 | LLM 模型 |
 | `thinking_level` | `str \| None` | `"off"` | 推理等级：off/minimal/low/medium/high/xhigh |
+| `steering_mode` | `str` | `"one-at-a-time"` | steering 队列模式：`one-at-a-time` 或 `all` |
+| `follow_up_mode` | `str` | `"one-at-a-time"` | follow-up 队列模式：`one-at-a-time` 或 `all` |
 | `tools` | `list \| dict \| None` | coding_tools | 工具集，None 使用默认编码工具 |
 | `active_tool_names` | `list[str] \| None` | 全部 | 激活的工具子集 |
 | `custom_system_prompt` | `str \| None` | None | 自定义 system prompt |
@@ -117,6 +119,31 @@ await session.prompt(UserMessage(content="Hello"))
 await session.continue_()
 ```
 
+### Steering 与 Follow-up
+
+`AgentSession` 现在直接暴露底层 `Agent` 的队列控制能力，不必再手动访问 `session.agent`：
+
+```python
+from bampy.ai import UserMessage
+
+# Steering: 在下一次 LLM 调用前注入消息
+session.steer(UserMessage(content="换一个实现方向"))
+
+# Follow-up: 当前 agent loop 结束后发起新一轮
+session.follow_up(UserMessage(content="接着补测试"))
+
+# 执行已排队消息
+await session.continue_()
+
+# 队列模式
+session.set_steering_mode("one-at-a-time")
+session.set_follow_up_mode("all")
+
+# 队列状态
+session.has_queued_messages()
+session.clear_all_queues()
+```
+
 ### 事件订阅
 
 ```python
@@ -150,6 +177,8 @@ unsub = session.subscribe(on_event)
 # 读取
 session.model              # 当前模型
 session.thinking_level     # 当前推理等级
+session.steering_mode      # 当前 steering 队列模式
+session.follow_up_mode     # 当前 follow-up 队列模式
 session.messages           # 消息列表
 session.system_prompt      # 当前 system prompt
 session.active_tool_names  # 激活的工具名
@@ -158,6 +187,8 @@ session.cwd                # 工作目录
 # 修改
 session.set_model(get_model("openai", "gpt-4o"))
 session.set_thinking_level("high")
+session.set_steering_mode("all")
+session.set_follow_up_mode("one-at-a-time")
 session.set_active_tools(["bash", "read", "write"])
 ```
 

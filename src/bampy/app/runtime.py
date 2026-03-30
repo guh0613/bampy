@@ -207,6 +207,8 @@ class AgentSession:
         cwd: str | None = None,
         model: Model | None = None,
         thinking_level: AgentThinkingLevel | str | None = None,
+        steering_mode: str = "one-at-a-time",
+        follow_up_mode: str = "one-at-a-time",
         tools: list[AgentTool] | dict[str, AgentTool] | None = None,
         active_tool_names: list[str] | None = None,
         session_manager: SessionManager | None = None,
@@ -290,6 +292,8 @@ class AgentSession:
             },
             convert_to_llm=convert_to_llm or default_convert_to_llm,
             transform_context=self._transform_context,
+            steering_mode=steering_mode,
+            follow_up_mode=follow_up_mode,
             stream_fn=self._stream_fn,
             stream_options=self._stream_options,
             get_api_key=self._get_api_key,
@@ -326,6 +330,14 @@ class AgentSession:
     @property
     def thinking_level(self) -> AgentThinkingLevel:
         return self.agent.state.thinking_level
+
+    @property
+    def steering_mode(self) -> str:
+        return self.agent.get_steering_mode()
+
+    @property
+    def follow_up_mode(self) -> str:
+        return self.agent.get_follow_up_mode()
 
     @property
     def messages(self) -> list[AgentMessage]:
@@ -381,6 +393,18 @@ class AgentSession:
         self.agent.set_thinking_level(thinking_level)
         self._sync_session_settings()
 
+    def set_steering_mode(self, mode: str) -> None:
+        self.agent.set_steering_mode(mode)
+
+    def get_steering_mode(self) -> str:
+        return self.agent.get_steering_mode()
+
+    def set_follow_up_mode(self, mode: str) -> None:
+        self.agent.set_follow_up_mode(mode)
+
+    def get_follow_up_mode(self) -> str:
+        return self.agent.get_follow_up_mode()
+
     def get_all_tools(self) -> list[AgentTool]:
         return [self._tool_registry[name] for name in self._tool_registry]
 
@@ -435,6 +459,24 @@ class AgentSession:
         await self._drain_event_queue()
 
     resume = continue_
+
+    def steer(self, message: AgentMessage) -> None:
+        self.agent.steer(message)
+
+    def follow_up(self, message: AgentMessage) -> None:
+        self.agent.follow_up(message)
+
+    def clear_steering_queue(self) -> None:
+        self.agent.clear_steering_queue()
+
+    def clear_follow_up_queue(self) -> None:
+        self.agent.clear_follow_up_queue()
+
+    def clear_all_queues(self) -> None:
+        self.agent.clear_all_queues()
+
+    def has_queued_messages(self) -> bool:
+        return self.agent.has_queued_messages()
 
     async def compact(self) -> CompactionResult | None:
         await self.start()
@@ -906,6 +948,8 @@ async def create_agent_session(
     cwd: str | None = None,
     model: Model | None = None,
     thinking_level: AgentThinkingLevel | str | None = None,
+    steering_mode: str = "one-at-a-time",
+    follow_up_mode: str = "one-at-a-time",
     tools: list[AgentTool] | dict[str, AgentTool] | None = None,
     active_tool_names: list[str] | None = None,
     session_manager: SessionManager | None = None,
@@ -950,6 +994,8 @@ async def create_agent_session(
         cwd=resolved_cwd,
         model=model,
         thinking_level=thinking_level,
+        steering_mode=steering_mode,
+        follow_up_mode=follow_up_mode,
         tools=tools,
         active_tool_names=active_tool_names,
         session_manager=session_manager,

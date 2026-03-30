@@ -14,6 +14,7 @@ from bampy.ai.types import (
     TextContent,
     ToolCall,
     ToolResultMessage,
+    UserMessage,
     Usage,
 )
 from bampy.app.compaction import CompactionResult, CompactionSettings
@@ -277,3 +278,114 @@ class TestAgentSession:
         session.reload_session_context()
 
         assert session.model.base_url == "https://proxy.example.test"
+
+    async def test_session_exposes_steer_and_follow_up_queue_controls(self):
+        session_manager = SessionManager.in_memory("/repo")
+        session_manager.append_message(UserMessage(content="Initial"))
+        session_manager.append_message(
+            AssistantMessage(
+                api="mock-api",
+                provider="mock",
+                model="mock-model",
+                content=[TextContent(text="Initial response")],
+                stop_reason=StopReason.STOP,
+            )
+        )
+
+        response_count = {"value": 0}
+
+        def stream_fn(model, context, options):
+            del context, options
+            response_count["value"] += 1
+            return done_stream(
+                AssistantMessage(
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    content=[TextContent(text=f"Processed {response_count['value']}")],
+                    stop_reason=StopReason.STOP,
+                )
+            )
+
+        session = AgentSession(
+            cwd="/repo",
+            model=create_model(),
+            session_manager=session_manager,
+            stream_fn=stream_fn,
+        )
+
+        assert session.steering_mode == "one-at-a-time"
+        assert session.follow_up_mode == "one-at-a-time"
+
+        session.set_steering_mode("all")
+        session.set_follow_up_mode("all")
+
+        assert session.get_steering_mode() == "all"
+        assert session.get_follow_up_mode() == "all"
+
+        session.steer(UserMessage(content="Steering A"))
+        session.follow_up(UserMessage(content="Follow-up A"))
+        assert session.has_queued_messages() is True
+
+        session.clear_steering_queue()
+        assert session.has_queued_messages() is True
+
+        session.steer(UserMessage(content="Steering B"))
+        session.follow_up(UserMessage(content="Follow-up B"))
+        session.clear_follow_up_queue()
+        assert session.has_queued_messages() is True
+
+        session.follow_up(UserMessage(content="Follow-up C"))
+        await session.continue_()
+
+        assert response_count["value"] == 2
+        assert session.has_queued_messages() is False
+        assert [
+            message.role if hasattr(message, "role") else message["role"]
+            for message in session.messages
+        ] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        steering_message = session.messages[2]
+        follow_up_message = session.messages[4]
+        assert (
+            steering_message.content
+            if hasattr(steering_message, "content")
+            else steering_message["content"]
+        ) == "Steering B"
+        assert (
+            follow_up_message.content
+            if hasattr(follow_up_message, "content")
+            else follow_up_message["content"]
+        ) == "Follow-up C"
+
+    async def test_create_agent_session_passes_queue_modes_to_agent(self, tmp_path: Path):
+        result = await create_agent_session(
+            cwd=str(tmp_path),
+            model=create_model(),
+            session_manager=SessionManager.in_memory(str(tmp_path)),
+            discover_extensions=False,
+            include_default_skills=False,
+            steering_mode="all",
+            follow_up_mode="all",
+            stream_fn=lambda model, context, options: done_stream(
+                AssistantMessage(
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    content=[TextContent(text="ok")],
+                    stop_reason=StopReason.STOP,
+                )
+            ),
+        )
+
+        try:
+            assert result.session.steering_mode == "all"
+            assert result.session.follow_up_mode == "all"
+        finally:
+            await result.session.close()

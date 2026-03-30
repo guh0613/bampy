@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from bampy.ai import SimpleStreamOptions, get_model
-from bampy.ai.types import AssistantMessage, Model, StopReason, TextContent, ToolResultMessage
+from bampy.ai.types import AssistantMessage, Model, StopReason, TextContent, ToolResultMessage, UserMessage
 from bampy.app import CompactionSettings, SessionManager, create_agent_session
 
 # ---------------------------------------------------------------------------
@@ -147,6 +147,44 @@ def _write_live_project(tmp_path: Path) -> Path:
 @requires_live_api
 class TestLiveAgentSession:
     """Real end-to-end checks against the app-layer runtime."""
+
+    async def test_queue_controls_with_real_model(self, tmp_path: Path):
+        project_dir = _write_live_project(tmp_path)
+
+        result = await create_agent_session(
+            cwd=str(project_dir),
+            model=_model(),
+            thinking_level="off",
+            session_manager=SessionManager.in_memory(str(project_dir)),
+            stream_options=SimpleStreamOptions(api_key=_API_KEY),
+            max_turns=8,
+        )
+        session = result.session
+
+        try:
+            await session.prompt("Reply with exactly READY_OK and nothing else.")
+            first_reply = _text(session.messages[-1])
+            assert "ready_ok" in first_reply.lower()
+
+            session.steer(UserMessage(content="Reply with exactly STEER_OK and nothing else."))
+            session.follow_up(UserMessage(content="Reply with exactly FOLLOW_UP_OK and nothing else."))
+
+            assert session.has_queued_messages() is True
+            await session.continue_()
+
+            tail_roles = [
+                message.role if hasattr(message, "role") else message.get("role")
+                for message in session.messages[-4:]
+            ]
+            assert tail_roles == ["user", "assistant", "user", "assistant"]
+
+            steer_reply = _text(session.messages[-3])
+            follow_up_reply = _text(session.messages[-1])
+            assert "steer_ok" in steer_reply.lower()
+            assert "follow_up_ok" in follow_up_reply.lower()
+            assert session.has_queued_messages() is False
+        finally:
+            await session.close()
 
     async def test_end_to_end_tools_extensions_and_manual_compaction(self, tmp_path: Path):
         project_dir = _write_live_project(tmp_path)
