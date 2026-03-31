@@ -340,6 +340,10 @@ class AgentSession:
         return self.agent.get_follow_up_mode()
 
     @property
+    def is_processing(self) -> bool:
+        return self.agent.state.is_streaming
+
+    @property
     def messages(self) -> list[AgentMessage]:
         return self.agent.state.messages
 
@@ -477,6 +481,9 @@ class AgentSession:
 
     def has_queued_messages(self) -> bool:
         return self.agent.has_queued_messages()
+
+    def abort(self, reason: str | None = None) -> None:
+        self.agent.abort(reason)
 
     async def compact(self) -> CompactionResult | None:
         await self.start()
