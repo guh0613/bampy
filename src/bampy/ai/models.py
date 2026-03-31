@@ -235,6 +235,18 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             cost=_cost(input=2.0, output=12.0, cache_read=0.20),
         ),
     ),
+    "ollama": (
+        _model(
+            id="gemini-3-flash",
+            name="Gemini 3 Flash",
+            api="ollama-responses",
+            provider="ollama",
+            reasoning=True,
+            context_window=1_048_576,
+            max_tokens=65_536,
+            cost=_cost(input=0.50, output=3.0, cache_read=0.05),
+        ),
+    ),
     "openai": (
         _model(
             id="gpt-4.1",

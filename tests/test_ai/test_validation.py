@@ -40,6 +40,34 @@ class TestValidateToolArguments:
         assert result["query"] == "test"
         assert result["limit"] is None
 
+    def test_defaulted_field_uses_schema_default(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "wait_until": {
+                    "type": "string",
+                    "default": "domcontentloaded",
+                },
+            },
+            "required": [],
+        }
+        result = validate_tool_arguments({}, schema)
+        assert result["wait_until"] == "domcontentloaded"
+
+    def test_non_nullable_null_is_treated_as_missing(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "wait_until": {
+                    "type": "string",
+                    "default": "domcontentloaded",
+                },
+            },
+            "required": [],
+        }
+        result = validate_tool_arguments({"wait_until": None}, schema)
+        assert result["wait_until"] == "domcontentloaded"
+
     def test_invalid_arguments_raises(self):
         schema = {
             "type": "object",
@@ -66,6 +94,24 @@ class TestValidateToolArguments:
         tool_call = ToolCall(id="call_1", name="search", arguments={"query": "hello"})
         result = validate_tool_call(tools, tool_call)
         assert result == {"query": "hello"}
+
+    def test_optional_integer_anyof_schema_accepts_integer(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "timeout_ms": {
+                    "anyOf": [
+                        {"type": "integer", "minimum": 1},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                },
+            },
+            "required": [],
+        }
+
+        result = validate_tool_arguments({"timeout_ms": 10000}, schema)
+        assert result["timeout_ms"] == 10000
 
 
 class TestSchemaFromModel:
