@@ -52,6 +52,10 @@ _DEFAULT_USER_AGENT = (
     "Chrome/136.0.0.0 Safari/537.36"
 )
 
+_MISSING_TERMINAL_EVENT_ERROR = (
+    "Response stream ended before a terminal response.completed event was received."
+)
+
 
 def _normalize_stream_delta(existing: str, delta: str) -> str:
     """Collapse overlapping chunks into the suffix that still needs appending."""
@@ -146,16 +150,24 @@ def stream_ollama(
 
             output_to_content: dict[int, int] = {}
             tool_json_bufs: dict[int, str] = {}
+            saw_completion_event = False
 
             response = await client.responses.create(**params)
             async for event in response:
-                _handle_stream_event(
+                saw_completion_event = _handle_stream_event(
                     event,
                     output,
                     event_stream,
                     output_to_content,
                     tool_json_bufs,
-                )
+                ) or saw_completion_event
+
+            if not saw_completion_event:
+                output.stop_reason = StopReason.ERROR
+                output.error_message = _MISSING_TERMINAL_EVENT_ERROR
+                event_stream.push(ErrorEvent(reason=StopReason.ERROR, error=output))
+                event_stream.end(output)
+                return
 
             output.usage.cost = calculate_cost(model, output.usage)
 
@@ -211,7 +223,7 @@ def _handle_stream_event(
     stream: AssistantMessageEventStream,
     output_to_content: dict[int, int],
     tool_json_bufs: dict[int, str],
-) -> None:
+) -> bool:
     """Map a single Responses API SSE event to bampy events."""
     etype = getattr(event, "type", "")
 
@@ -219,7 +231,7 @@ def _handle_stream_event(
         item = getattr(event, "item", None)
         out_idx = getattr(event, "output_index", 0)
         if item is None:
-            return
+            return False
 
         item_type = getattr(item, "type", "")
 
@@ -279,7 +291,7 @@ def _handle_stream_event(
             if isinstance(block, TextContent):
                 delta = _normalize_stream_delta(block.text, delta)
                 if not delta:
-                    return
+                    return False
                 block.text += delta
             stream.push(TextDeltaEvent(
                 content_index=content_idx,
@@ -340,7 +352,7 @@ def _handle_stream_event(
             if isinstance(block, ThinkingContent):
                 delta = _normalize_stream_delta(block.thinking, delta)
                 if not delta:
-                    return
+                    return False
                 block.thinking += delta
             stream.push(ThinkingDeltaEvent(
                 content_index=content_idx,
@@ -410,6 +422,9 @@ def _handle_stream_event(
                 )
             else:
                 output.stop_reason = StopReason.ERROR
+            return True
+
+    return False
 
 
 def get_provider_entry() -> ApiProviderEntry:

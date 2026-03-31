@@ -30,6 +30,14 @@ class TestModelRegistry:
         assert model is not None
         assert model.api == "openai-responses"
 
+    def test_get_builtin_ollama_model(self):
+        model = get_model("gemini-3-flash-ol", provider="ollama")
+        assert model is not None
+        assert model.api == "ollama-responses"
+        assert model.reasoning is True
+        assert model.context_window == 1_048_576
+        assert model.max_tokens == 65_536
+
     def test_updated_model_capabilities(self):
         gpt_54 = get_model("gpt-5.4", provider="openai")
         haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")
@@ -59,6 +67,7 @@ class TestModelRegistry:
         assert "anthropic" in providers
         assert "openai" in providers
         assert "google" in providers
+        assert "ollama" in providers
 
     def test_register_custom_model(self):
         custom = Model(

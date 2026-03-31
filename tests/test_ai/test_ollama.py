@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
-from bampy.ai.types import AssistantMessage, TextContent, ThinkingContent
+import pytest
+
+from bampy.ai.types import AssistantMessage, Context, Model, StopReason, TextContent, ThinkingContent, UserMessage
 
 
 class TestStreamEventHandling:
@@ -73,3 +76,60 @@ class TestStreamEventHandling:
             )
 
         assert output.content[0].thinking == "让我先看看"
+
+
+class TestStreamingTermination:
+    @pytest.mark.asyncio
+    async def test_missing_response_completed_becomes_error(self, monkeypatch: pytest.MonkeyPatch):
+        from bampy.ai.providers.ollama import stream_ollama
+
+        class _FakeResponse:
+            def __init__(self, events):
+                self._events = iter(events)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class _FakeResponses:
+            async def create(self, **_: object):
+                return _FakeResponse([
+                    SimpleNamespace(
+                        type="response.content_part.added",
+                        output_index=0,
+                        part=SimpleNamespace(type="output_text"),
+                    ),
+                    SimpleNamespace(
+                        type="response.output_text.delta",
+                        output_index=0,
+                        delta="半截内容",
+                    ),
+                ])
+
+        class _FakeAsyncOpenAI:
+            def __init__(self, **_: object):
+                self.responses = _FakeResponses()
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
+
+        model = Model(
+            id="kimi-k2.5",
+            name="kimi-k2.5",
+            api="ollama-responses",
+            provider="ollama",
+        )
+        ctx = Context(messages=[UserMessage(content="hello")])
+        result = await stream_ollama(model, ctx).result()
+
+        assert result.stop_reason == StopReason.ERROR
+        assert result.error_message is not None
+        assert "response.completed" in result.error_message
+        assert any(
+            isinstance(block, TextContent) and block.text == "半截内容"
+            for block in result.content
+        )
