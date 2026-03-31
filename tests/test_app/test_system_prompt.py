@@ -31,6 +31,19 @@ class TestBuildSystemPrompt:
         assert "Current working directory: /repo/project" in prompt
         assert "Current date:" in prompt
 
+    def test_custom_prompt_mode_can_disable_automatic_augmentation(self):
+        prompt = build_system_prompt(
+            BuildSystemPromptOptions(
+                custom_prompt="Base prompt",
+                cwd="/host/repo/project",
+                append_system_prompt="Extra tail",
+                augment_custom_prompt=False,
+                context_files=[ContextFile(path="CLAUDE.md", content="Follow rules")],
+            )
+        )
+
+        assert prompt == "Base prompt\n\nExtra tail"
+
     def test_default_prompt_builds_visible_tools_and_guidelines(self):
         prompt = build_system_prompt(
             BuildSystemPromptOptions(

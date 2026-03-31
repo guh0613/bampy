@@ -31,6 +31,7 @@ class BuildSystemPromptOptions:
     tool_snippets: dict[str, str] | None = None
     prompt_guidelines: list[str] | None = None
     append_system_prompt: str | None = None
+    augment_custom_prompt: bool = True
     cwd: str | None = None
     context_files: list[ContextFile] | None = None
     skills: list[Skill] | None = None
@@ -65,6 +66,8 @@ def build_system_prompt(options: BuildSystemPromptOptions | None = None) -> str:
         prompt = options.custom_prompt
         if append_section:
             prompt += append_section
+        if not options.augment_custom_prompt:
+            return prompt
         if context_files:
             prompt += "\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n"
             for cf in context_files:

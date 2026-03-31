@@ -218,6 +218,7 @@ class AgentSession:
         skills: list[Skill] | None = None,
         custom_system_prompt: str | None = None,
         append_system_prompt: str | None = None,
+        augment_custom_system_prompt: bool = True,
         stream_options: SimpleStreamOptions | None = None,
         get_api_key: ApiKeyResolverFn | None = None,
         stream_fn: StreamFn | None = None,
@@ -241,6 +242,7 @@ class AgentSession:
         self._skills = list(skills or [])
         self._custom_system_prompt = custom_system_prompt
         self._append_system_prompt = append_system_prompt
+        self._augment_custom_system_prompt = augment_custom_system_prompt
         self._compaction_settings = compaction_settings or DEFAULT_COMPACTION_SETTINGS
         self._auto_compaction = auto_compaction
         self._summarization_model = summarization_model
@@ -879,6 +881,7 @@ class AgentSession:
                 tool_snippets=dict(self._tool_snippets),
                 prompt_guidelines=list(self._prompt_guidelines),
                 append_system_prompt=self._append_system_prompt,
+                augment_custom_prompt=self._augment_custom_system_prompt,
                 cwd=self._cwd,
                 context_files=list(self._context_files),
                 skills=list(self._skills),
@@ -968,6 +971,7 @@ async def create_agent_session(
     context_filenames: list[str] | None = None,
     custom_system_prompt: str | None = None,
     append_system_prompt: str | None = None,
+    augment_custom_system_prompt: bool = True,
     stream_options: SimpleStreamOptions | None = None,
     get_api_key: ApiKeyResolverFn | None = None,
     stream_fn: StreamFn | None = None,
@@ -1011,6 +1015,7 @@ async def create_agent_session(
         skills=loaded_skills.skills,
         custom_system_prompt=custom_system_prompt,
         append_system_prompt=append_system_prompt,
+        augment_custom_system_prompt=augment_custom_system_prompt,
         stream_options=stream_options,
         get_api_key=get_api_key,
         stream_fn=stream_fn,
