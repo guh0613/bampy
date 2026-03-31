@@ -96,12 +96,19 @@ def _split_openai_tool_call_id(tool_call_id: str) -> tuple[str, str | None]:
     return sanitize_tool_call_id(tool_call_id), None
 
 
+def _supports_multimodal_tool_results(model: Model) -> bool:
+    """Whether tool results may include image blocks for this model/provider."""
+    return model.provider == "openai" and "image" in model.input_types
+
+
 # ---------------------------------------------------------------------------
 # Message conversion (bampy -> OpenAI Responses API input format)
 # ---------------------------------------------------------------------------
 
 def _convert_messages(
     context: Context,
+    *,
+    allow_tool_result_images: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert context to OpenAI Responses API input items."""
     from bampy.ai.types import AssistantMessage, ToolResultMessage, UserMessage
@@ -126,7 +133,10 @@ def _convert_messages(
             items.append({
                 "type": "function_call_output",
                 "call_id": sanitize_tool_call_id(msg.tool_call_id),
-                "output": _tool_result_to_string(msg.content),
+                "output": _convert_tool_result_output(
+                    msg.content,
+                    allow_images=allow_tool_result_images,
+                ),
             })
 
     return items
@@ -139,13 +149,9 @@ def _convert_user_content(content: str | list) -> str | list[dict[str, Any]]:
 
     parts: list[dict[str, Any]] = []
     for item in content:
-        if isinstance(item, TextContent):
-            parts.append({"type": "input_text", "text": item.text})
-        elif isinstance(item, ImageContent):
-            parts.append({
-                "type": "input_image",
-                "image_url": f"data:{item.mime_type};base64,{item.data}",
-            })
+        converted = _convert_content_block(item)
+        if converted is not None:
+            parts.append(converted)
     return parts if parts else ""
 
 
@@ -188,8 +194,20 @@ def _convert_assistant_items(
         items.append({"role": "assistant", "content": "\n".join(text_parts)})
 
 
+def _convert_content_block(item: Any) -> dict[str, Any] | None:
+    """Convert a text/image block to Responses API input content."""
+    if isinstance(item, TextContent):
+        return {"type": "input_text", "text": item.text}
+    if isinstance(item, ImageContent):
+        return {
+            "type": "input_image",
+            "image_url": f"data:{item.mime_type};base64,{item.data}",
+        }
+    return None
+
+
 def _tool_result_to_string(content: list) -> str:
-    """Flatten tool result content to a string for Responses API."""
+    """Flatten tool result content to a text fallback for Responses API."""
     parts: list[str] = []
     for item in content:
         if isinstance(item, TextContent):
@@ -197,6 +215,27 @@ def _tool_result_to_string(content: list) -> str:
         elif isinstance(item, ImageContent):
             parts.append("[image]")
     return "\n".join(parts) if parts else ""
+
+
+def _convert_tool_result_output(
+    content: list,
+    *,
+    allow_images: bool,
+) -> str | list[dict[str, Any]]:
+    """Convert tool result content to Responses API output payload."""
+    if not allow_images:
+        return _tool_result_to_string(content)
+
+    has_image = any(isinstance(item, ImageContent) for item in content)
+    if not has_image:
+        return _tool_result_to_string(content)
+
+    blocks: list[dict[str, Any]] = []
+    for item in content:
+        converted = _convert_content_block(item)
+        if converted is not None:
+            blocks.append(converted)
+    return blocks if blocks else ""
 
 
 def _convert_tools(tools: list | None) -> list[dict[str, Any]] | None:
@@ -262,7 +301,10 @@ def stream_openai(
             client = openai_sdk.AsyncOpenAI(**client_kwargs)
 
             # Build params
-            input_items = _convert_messages(context)
+            input_items = _convert_messages(
+                context,
+                allow_tool_result_images=_supports_multimodal_tool_results(model),
+            )
             max_tokens = (
                 (options.max_tokens if options and options.max_tokens else None)
                 or model.max_tokens

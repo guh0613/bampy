@@ -124,6 +124,53 @@ class TestMessageConversion:
         assert items[0]["type"] == "function_call_output"
         assert items[0]["output"] == "result data"
 
+    def test_tool_result_with_image_uses_multimodal_output_when_enabled(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        ctx = Context(messages=[
+            ToolResultMessage(
+                tool_call_id="call_1",
+                tool_name="read",
+                content=[
+                    TextContent(text="Read image file [image/png]"),
+                    ImageContent(data="aGVsbG8=", mime_type="image/png"),
+                ],
+            ),
+        ])
+
+        items = _convert_messages(ctx, allow_tool_result_images=True)
+        output = items[0]["output"]
+
+        assert items[0]["type"] == "function_call_output"
+        assert isinstance(output, list)
+        assert output[0] == {
+            "type": "input_text",
+            "text": "Read image file [image/png]",
+        }
+        assert output[1] == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,aGVsbG8=",
+        }
+
+    def test_tool_result_with_image_falls_back_to_placeholder_when_disabled(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        ctx = Context(messages=[
+            ToolResultMessage(
+                tool_call_id="call_1",
+                tool_name="read",
+                content=[
+                    TextContent(text="Read image file [image/png]"),
+                    ImageContent(data="aGVsbG8=", mime_type="image/png"),
+                ],
+            ),
+        ])
+
+        items = _convert_messages(ctx, allow_tool_result_images=False)
+
+        assert items[0]["type"] == "function_call_output"
+        assert items[0]["output"] == "Read image file [image/png]\n[image]"
+
     def test_thinking_skipped_in_conversion(self):
         from bampy.ai.providers.openai import _convert_messages
 
