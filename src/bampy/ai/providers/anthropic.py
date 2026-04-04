@@ -42,6 +42,12 @@ from bampy.ai.providers._cancellation import spawn_provider_task
 from bampy.ai.providers._transform import sanitize_tool_call_id
 
 
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36"
+)
+
 # ---------------------------------------------------------------------------
 # Thinking level → Anthropic thinking config
 # ---------------------------------------------------------------------------
@@ -387,6 +393,7 @@ def stream_anthropic(
                 extra_headers.update(options.headers)
             if options and options.interleaved_thinking and not _supports_adaptive_thinking(model.id):
                 _append_beta_header(extra_headers, _INTERLEAVED_THINKING_BETA)
+            extra_headers.setdefault("User-Agent", _DEFAULT_USER_AGENT)
             if extra_headers:
                 client_kwargs["default_headers"] = extra_headers
 
