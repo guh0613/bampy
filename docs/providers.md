@@ -135,7 +135,7 @@ from bampy.ai import register_model, Model, ModelCost
 register_model(Model(
     id="deepseek-chat",
     name="DeepSeek Chat",
-    api="openai-responses",      # 使用 OpenAI 兼容 API
+    api="openai-completions",    # Chat Completions 兼容端点
     provider="deepseek",
     base_url="https://api.deepseek.com/v1",
     context_window=64_000,
@@ -143,5 +143,7 @@ register_model(Model(
     cost=ModelCost(input=0.14, output=0.28),
 ))
 ```
+
+如果你的网关实现的是 OpenAI Responses API，则将 `api` 设为 `openai-responses`；如果只兼容 `/v1/chat/completions`，则使用 `openai-completions`。
 
 添加全新的提供商适配见 [自定义提供商](custom-provider.md)。

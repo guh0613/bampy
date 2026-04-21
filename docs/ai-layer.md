@@ -172,7 +172,7 @@ providers = get_providers()
 register_model(Model(
     id="my-model",
     name="My Model",
-    api="openai-responses",  # API 类型决定使用哪个提供商适配器
+    api="openai-completions",  # 或 "openai-responses"
     provider="custom",
     base_url="https://my-api.example.com/v1",
     context_window=128_000,

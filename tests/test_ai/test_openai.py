@@ -8,6 +8,7 @@ Live tests require .env.dev at project root (or environment variables):
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,12 +47,17 @@ if _ENV_FILE.exists():
 
 _API_KEY = os.environ.get("GPT_API_KEY", "")
 _BASE_URL = os.environ.get("GPT_BASE_URL", "")
+_CHAT_COMPLETIONS_LIVE_MODEL = "minimax-m2.5-free"
 
 # Default model for live tests
 _TEST_MODEL = "gpt-5.4-mini"
 
 live = pytest.mark.live
 requires_live_api = pytest.mark.skipif(not _API_KEY, reason="GPT_API_KEY not set")
+requires_chat_completions_live_api = pytest.mark.skipif(
+    not (_API_KEY and _BASE_URL),
+    reason="GPT_API_KEY or GPT_BASE_URL not set for chat-completions live test",
+)
 
 
 def _model(model_id: str = _TEST_MODEL) -> Model:
@@ -66,6 +72,32 @@ def _opts(**kw) -> OpenAIOptions:
     headers = kw.pop("headers", None) or {}
     headers.setdefault("User-Agent", "bampy/1.0")
     return OpenAIOptions(api_key=_API_KEY, headers=headers, **kw)
+
+
+def _chat_model(*, reasoning: bool = False, input_types: list[str] | None = None) -> Model:
+    return Model(
+        id="chat-model",
+        name="Chat Model",
+        api="openai-completions",
+        provider="openai",
+        reasoning=reasoning,
+        input_types=input_types or ["text", "image"],
+        base_url="https://api.openai.com/v1",
+        max_tokens=16384,
+    )
+
+
+def _live_chat_completions_model(model_id: str = _CHAT_COMPLETIONS_LIVE_MODEL) -> Model:
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="openai-completions",
+        provider="openai",
+        reasoning=False,
+        input_types=["text", "image"],
+        base_url=_BASE_URL or "https://api.openai.com/v1",
+        max_tokens=16384,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +280,110 @@ class TestToolConversion:
         assert _convert_tools([]) is None
 
 
+class TestChatCompletionMessageConversion:
+    def test_system_prompt_role_depends_on_model_capability(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        ctx = Context(system_prompt="Be helpful.", messages=[UserMessage(content="hi")])
+
+        reasoning_items = _convert_chat_completion_messages(_chat_model(reasoning=True), ctx)
+        non_reasoning_items = _convert_chat_completion_messages(_chat_model(reasoning=False), ctx)
+
+        assert reasoning_items[0]["role"] == "developer"
+        assert non_reasoning_items[0]["role"] == "system"
+
+    def test_assistant_tool_calls_and_tool_results_are_converted(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        model = Model(
+            id="gpt-5.4",
+            name="GPT-5.4",
+            api="openai-completions",
+            provider="openai",
+            reasoning=True,
+        )
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="openai",
+            model="gpt-5.4",
+            content=[
+                TextContent(text="Let me check."),
+                ToolCall(id="call_1|fc_1", name="search", arguments={"q": "test"}),
+            ],
+        )
+        ctx = Context(messages=[
+            assistant,
+            ToolResultMessage(
+                tool_call_id="call_1|fc_1",
+                tool_name="search",
+                content=[TextContent(text="result data")],
+            ),
+        ])
+
+        items = _convert_chat_completion_messages(model, ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "Let me check."
+        assert items[0]["tool_calls"][0]["id"] == "call_1"
+        assert items[0]["tool_calls"][0]["function"]["name"] == "search"
+        assert items[1]["role"] == "tool"
+        assert items[1]["tool_call_id"] == "call_1"
+        assert items[1]["content"] == "result data"
+
+    def test_tool_result_images_are_forwarded_as_user_content(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        ctx = Context(messages=[
+            ToolResultMessage(
+                tool_call_id="call_1",
+                tool_name="vision_tool",
+                content=[
+                    TextContent(text="screenshot attached"),
+                    ImageContent(data="aGVsbG8=", mime_type="image/png"),
+                ],
+            ),
+        ])
+
+        items = _convert_chat_completion_messages(_chat_model(), ctx)
+
+        assert items[0]["role"] == "tool"
+        assert items[0]["content"] == "screenshot attached"
+        assert items[1]["role"] == "user"
+        assert items[1]["content"][0]["type"] == "text"
+        assert items[1]["content"][1]["type"] == "image_url"
+
+    def test_reasoning_signature_roundtrips_for_chat_completions(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="openai",
+            model="gpt-5.4",
+            content=[
+                ThinkingContent(
+                    thinking="deep thought",
+                    thinking_signature="reasoning_content",
+                ),
+                TextContent(text="final answer"),
+            ],
+        )
+        ctx = Context(messages=[assistant])
+        items = _convert_chat_completion_messages(
+            Model(
+                id="gpt-5.4",
+                name="GPT-5.4",
+                api="openai-completions",
+                provider="openai",
+                reasoning=True,
+            ),
+            ctx,
+        )
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "final answer"
+        assert items[0]["reasoning_content"] == "deep thought"
+
+
 class TestOpenAIOptions:
     def test_default(self):
         opts = OpenAIOptions()
@@ -255,9 +391,32 @@ class TestOpenAIOptions:
         assert opts.temperature is None
 
     def test_with_reasoning(self):
-        opts = OpenAIOptions(reasoning_effort="xhigh", temperature=0.5)
+        opts = OpenAIOptions(
+            reasoning_effort="xhigh",
+            temperature=0.5,
+            tool_choice="required",
+        )
         assert opts.reasoning_effort == "xhigh"
         assert opts.temperature == 0.5
+        assert opts.tool_choice == "required"
+
+    def test_client_sets_default_user_agent(self, monkeypatch):
+        from bampy.ai.providers.openai import _create_openai_client
+
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        model = _chat_model()
+        _create_openai_client(
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+            model,
+            OpenAIOptions(api_key="test-key"),
+        )
+
+        assert captured["default_headers"]["User-Agent"] == "bampy/1.0"
 
 
 class TestReasoningEffortResolution:
@@ -313,6 +472,214 @@ class TestStreamEventHandling:
         assert isinstance(thinking, ThinkingContent)
         assert thinking.thinking == "deep thought"
         assert thinking.thinking_signature is not None
+
+
+class _FakeAsyncIterator:
+    def __init__(self, items):
+        self._items = iter(items)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._items)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class TestChatCompletionStreaming:
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_text_and_usage(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        captured: dict[str, object] = {}
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_1",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(content="Hello", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_1",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content=None, refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_1",
+                choices=[],
+                usage=SimpleNamespace(
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    total_tokens=14,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=2),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                captured["params"] = params
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        result = await stream_openai_completions(
+            _chat_model(),
+            Context(messages=[UserMessage(content="Say hello")]),
+            OpenAIOptions(api_key="test-key", tool_choice="auto"),
+        ).result()
+
+        assert result.stop_reason == StopReason.STOP
+        assert result.response_id == "chatcmpl_1"
+        assert result.usage.input == 8
+        assert result.usage.output == 4
+        assert result.usage.cache_read == 2
+        assert result.usage.total_tokens == 14
+        assert [block.text for block in result.content if isinstance(block, TextContent)] == ["Hello"]
+        assert captured["params"]["stream_options"] == {"include_usage": True}
+        assert captured["params"]["tool_choice"] == "auto"
+        assert captured["params"]["max_completion_tokens"] == 16384
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_forwards_explicit_max_tokens(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        captured: dict[str, object] = {}
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_2",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content="ok", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=2,
+                    completion_tokens=1,
+                    total_tokens=3,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                captured["params"] = params
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        await stream_openai_completions(
+            _chat_model(),
+            Context(messages=[UserMessage(content="hi")]),
+            OpenAIOptions(api_key="test-key", max_tokens=123),
+        ).result()
+
+        assert captured["params"]["max_completion_tokens"] == 123
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_tool_calls(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_tool",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content=None,
+                            refusal=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call_1",
+                                    function=SimpleNamespace(name="search", arguments='{"q":"te'),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_tool",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="tool_calls",
+                        delta=SimpleNamespace(
+                            content=None,
+                            refusal=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id=None,
+                                    function=SimpleNamespace(name=None, arguments='st"}'),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_tool",
+                choices=[],
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=3,
+                    total_tokens=10,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        result = await stream_openai_completions(
+            _chat_model(),
+            Context(messages=[UserMessage(content="Search for test")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        tool_calls = [block for block in result.content if isinstance(block, ToolCall)]
+        assert result.stop_reason == StopReason.TOOL_USE
+        assert len(tool_calls) == 1
+        assert tool_calls[0].id == "call_1"
+        assert tool_calls[0].name == "search"
+        assert tool_calls[0].arguments == {"q": "test"}
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +767,29 @@ class TestLiveStreaming:
         )
         upper_ratio = sum(1 for c in text if c.isupper()) / max(len(text.replace(" ", "")), 1)
         assert upper_ratio > 0.5, f"Expected uppercase reply, got: {text!r}"
+
+
+@live
+@requires_chat_completions_live_api
+class TestLiveChatCompletions:
+    """Live tests for the OpenAI Chat Completions adapter."""
+
+    async def test_basic_text_stream(self):
+        """Basic streamed text generation through the chat-completions path."""
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        model = _live_chat_completions_model()
+        ctx = Context(messages=[UserMessage(content="Reply with exactly: hello from minimax")])
+        result = await stream_openai_completions(model, ctx, _opts()).result()
+
+        assert result.stop_reason == StopReason.STOP
+        assert result.usage.input > 0
+        assert result.usage.output > 0
+        text = "".join(
+            block.text for block in result.content if isinstance(block, TextContent)
+        )
+        assert text.strip(), "Expected non-empty text response"
+        assert "hello" in text.lower() or "minimax" in text.lower()
 
 
 @live

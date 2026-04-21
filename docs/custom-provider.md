@@ -2,7 +2,7 @@
 
 如果需要接入 bampy 尚未内置的 LLM API（且非 OpenAI 兼容），可以添加自定义提供商适配器。
 
-> 如果你的 API 是 OpenAI 兼容的，只需 `register_model` 设置 `api="openai-responses"` 和 `base_url` 即可，无需写适配器。见 [提供商文档](providers.md#自定义模型)。
+> 如果你的 API 是 OpenAI 兼容的，只需 `register_model` 设置 `api="openai-responses"` 或 `api="openai-completions"`，再配置 `base_url` 即可，无需写适配器。见 [提供商文档](providers.md#自定义模型)。
 
 ## 步骤
 

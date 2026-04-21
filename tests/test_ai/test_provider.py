@@ -102,6 +102,7 @@ class TestBuiltinRegistration:
 
         register_builtin_providers()
         assert "anthropic-messages" in _registry
+        assert "openai-completions" in _registry
         assert "openai-responses" in _registry
         assert "ollama-responses" in _registry
         assert "google-genai" in _registry

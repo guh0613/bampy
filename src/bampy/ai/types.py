@@ -170,13 +170,13 @@ class ThinkingLevel(StrEnum):
 class Model(BaseModel):
     id: str
     name: str
-    api: str              # API type, e.g. "anthropic-messages", "openai-responses"
+    api: str              # API type, e.g. "anthropic-messages", "openai-responses", "openai-completions"
     provider: str         # e.g. "anthropic", "openai"
     base_url: str = ""
     reasoning: bool = False
     input_types: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
     context_window: int = 128_000
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     cost: ModelCost = Field(default_factory=ModelCost)
     headers: dict[str, str] | None = None
 
@@ -233,7 +233,15 @@ class AnthropicOptions(StreamOptions):
 
 
 class OpenAIOptions(StreamOptions):
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None
+    response_format: dict[str, Any] | None = None
+    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = None
+    parallel_tool_calls: bool | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: Literal["in-memory", "24h"] | None = None
+    verbosity: Literal["low", "medium", "high"] | None = None
+    store: bool | None = None
 
 
 class GeminiOptions(StreamOptions):

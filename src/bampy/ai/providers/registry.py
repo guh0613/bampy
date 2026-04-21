@@ -23,6 +23,12 @@ def _load_openai() -> ApiProviderEntry:
     return get_provider_entry()
 
 
+def _load_openai_completions() -> ApiProviderEntry:
+    from bampy.ai.providers.openai import get_completions_provider_entry
+
+    return get_completions_provider_entry()
+
+
 def _load_ollama() -> ApiProviderEntry:
     from bampy.ai.providers.ollama import get_provider_entry
 
@@ -48,6 +54,11 @@ def register_builtin_providers(*, force: bool = False) -> None:
     register_api_provider(
         "openai-responses",
         loader=_load_openai,
+        source_id=_BUILTIN_SOURCE_ID,
+    )
+    register_api_provider(
+        "openai-completions",
+        loader=_load_openai_completions,
         source_id=_BUILTIN_SOURCE_ID,
     )
     register_api_provider(
