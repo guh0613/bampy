@@ -95,7 +95,7 @@ class TestModel:
     def test_model_defaults(self):
         m = Model(id="test", name="Test", api="test-api", provider="test")
         assert m.context_window == 128_000
-        assert m.max_tokens == 4096
+        assert m.max_tokens == 16384
         assert m.reasoning is False
         assert m.input_types == ["text"]
 

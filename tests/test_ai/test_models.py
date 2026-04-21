@@ -31,7 +31,7 @@ class TestModelRegistry:
         assert model.api == "openai-responses"
 
     def test_get_builtin_ollama_model(self):
-        model = get_model("gemini-3-flash-ol", provider="ollama")
+        model = get_model("gemini-3-flash", provider="ollama")
         assert model is not None
         assert model.api == "ollama-responses"
         assert model.reasoning is True
