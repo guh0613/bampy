@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from bampy.ai.types import Model, ModelCost, Usage, UsageCost
+from bampy.ai.types import Model, ModelCost, OpenAIChatCompat, Usage, UsageCost
 
 
 def _cost(
@@ -34,6 +34,7 @@ def _model(
     context_window: int,
     max_tokens: int,
     cost: ModelCost,
+    openai_chat_compat: OpenAIChatCompat | None = None,
 ) -> Model:
     return Model(
         id=id,
@@ -46,12 +47,14 @@ def _model(
         context_window=context_window,
         max_tokens=max_tokens,
         cost=cost,
+        openai_chat_compat=openai_chat_compat,
     )
 
 
 _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+_OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 
 BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
@@ -245,6 +248,28 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             context_window=1_048_576,
             max_tokens=65_536,
             cost=_cost(input=0.50, output=3.0, cache_read=0.05),
+        ),
+    ),
+    "opencode-go": (
+        _model(
+            id="kimi-k2.6",
+            name="Kimi K2.6",
+            api="openai-completions",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_BASE_URL,
+            reasoning=True,
+            context_window=262_144,
+            max_tokens=65_536,
+            cost=_cost(input=0.95, output=4.0, cache_read=0.16),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=["reasoning_content"],
+                supports_reasoning_effort=False,
+                thinking_param="kimi",
+                thinking_default_enabled=True,
+                thinking_tool_choice=["auto", "none"],
+            ),
         ),
     ),
     "openai": (

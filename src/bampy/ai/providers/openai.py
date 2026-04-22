@@ -194,6 +194,136 @@ def _option_value(obj: Any, name: str) -> Any:
     return None
 
 
+def _chat_reasoning_fields(model: Model) -> tuple[str, ...]:
+    """Return reasoning delta fields recognized by the chat-completions path."""
+    compat = model.openai_chat_compat
+    if compat and compat.stream_reasoning_fields:
+        return tuple(compat.stream_reasoning_fields)
+    return _CHAT_REASONING_FIELDS
+
+
+def _chat_replay_field(model: Model, thinking_blocks: list[ThinkingContent]) -> str | None:
+    """Pick the assistant message field used to replay prior thinking."""
+    reasoning_fields = _chat_reasoning_fields(model)
+    signature = next(
+        (
+            block.thinking_signature
+            for block in thinking_blocks
+            if isinstance(block.thinking_signature, str)
+            and block.thinking_signature in reasoning_fields
+        ),
+        None,
+    )
+    if signature:
+        return signature
+
+    compat = model.openai_chat_compat
+    if compat and compat.replay_thinking_field:
+        return compat.replay_thinking_field
+    return None
+
+
+def _chat_supports_reasoning_effort(model: Model) -> bool:
+    """Whether the chat-completions backend accepts ``reasoning_effort``."""
+    compat = model.openai_chat_compat
+    return compat.supports_reasoning_effort if compat is not None else True
+
+
+def _chat_max_tokens_field(model: Model) -> str:
+    """Return the max-token parameter name for the backend."""
+    compat = model.openai_chat_compat
+    return compat.max_tokens_field if compat is not None else "max_completion_tokens"
+
+
+def _chat_thinking_enabled(model: Model, options: OpenAIOptions | None) -> bool:
+    """Whether provider-specific thinking mode should be enabled."""
+    compat = model.openai_chat_compat
+    if compat is None or compat.thinking_param == "none":
+        return False
+
+    if compat.thinking_param == "kimi":
+        if options and options.reasoning_effort == "none":
+            return False
+        if options and options.reasoning_effort is not None:
+            return True
+        return compat.thinking_default_enabled
+
+    return False
+
+
+def _validate_chat_tool_choice(
+    model: Model,
+    options: OpenAIOptions | None,
+    *,
+    has_tools: bool,
+) -> None:
+    """Validate tool-choice constraints for compat chat-completions backends."""
+    compat = model.openai_chat_compat
+    if compat is None or not compat.thinking_tool_choice or not has_tools:
+        return
+    if not _chat_thinking_enabled(model, options):
+        return
+
+    tool_choice = options.tool_choice if options and options.tool_choice is not None else "auto"
+    if not isinstance(tool_choice, str) or tool_choice not in compat.thinking_tool_choice:
+        allowed = ", ".join(sorted(compat.thinking_tool_choice))
+        raise ValueError(
+            f"{model.provider}/{model.id} only supports tool_choice in {{{allowed}}} when thinking is enabled"
+        )
+
+
+def _build_chat_completion_params(
+    model: Model,
+    context: Context,
+    options: OpenAIOptions | None,
+) -> dict[str, Any]:
+    """Build one chat-completions request payload."""
+    max_tokens = (
+        options.max_tokens
+        if options and options.max_tokens is not None
+        else model.max_tokens
+    )
+    params: dict[str, Any] = {
+        "model": model.id,
+        "messages": _convert_chat_completion_messages(model, context),
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        _chat_max_tokens_field(model): max_tokens,
+    }
+
+    if options and options.temperature is not None:
+        params["temperature"] = options.temperature
+    if model.reasoning and options and options.reasoning_effort and _chat_supports_reasoning_effort(model):
+        params["reasoning_effort"] = options.reasoning_effort
+    if options and options.tool_choice is not None:
+        params["tool_choice"] = options.tool_choice
+    if options and options.response_format is not None:
+        params["response_format"] = options.response_format
+    if options and options.parallel_tool_calls is not None:
+        params["parallel_tool_calls"] = options.parallel_tool_calls
+    if options and options.prompt_cache_key:
+        params["prompt_cache_key"] = options.prompt_cache_key
+    if options and options.prompt_cache_retention:
+        params["prompt_cache_retention"] = options.prompt_cache_retention
+    if options and options.service_tier:
+        params["service_tier"] = options.service_tier
+    if options and options.verbosity:
+        params["verbosity"] = options.verbosity
+    params["store"] = options.store if options and options.store is not None else False
+
+    tools = _convert_chat_completion_tools(context.tools)
+    if tools:
+        params["tools"] = tools
+
+    thinking_enabled = _chat_thinking_enabled(model, options)
+    _validate_chat_tool_choice(model, options, has_tools=bool(tools))
+    compat = model.openai_chat_compat
+    if compat and compat.thinking_param == "kimi":
+        params["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+
+    return params
+
+
 # ---------------------------------------------------------------------------
 # Message conversion (bampy -> OpenAI Responses API input format)
 # ---------------------------------------------------------------------------
@@ -445,14 +575,7 @@ def _convert_chat_completion_messages(
                 if isinstance(block, ThinkingContent) and block.thinking.strip()
             ]
             if thinking_blocks:
-                signature = next(
-                    (
-                        block.thinking_signature
-                        for block in thinking_blocks
-                        if block.thinking_signature in _CHAT_REASONING_FIELDS
-                    ),
-                    None,
-                )
+                signature = _chat_replay_field(model, thinking_blocks)
                 if signature:
                     assistant[signature] = "\n".join(
                         block.thinking for block in thinking_blocks
@@ -1005,6 +1128,7 @@ def _apply_chat_completion_delta(
     output: AssistantMessage,
     stream: AssistantMessageEventStream,
     *,
+    reasoning_fields: tuple[str, ...],
     active_text_index: int | None,
     active_thinking_index: int | None,
     tool_indexes: dict[int, int],
@@ -1032,7 +1156,7 @@ def _apply_chat_completion_delta(
             partial=output,
         ))
 
-    for field in _CHAT_REASONING_FIELDS:
+    for field in reasoning_fields:
         reasoning_delta = _option_value(delta, field)
         if not reasoning_delta:
             continue
@@ -1156,43 +1280,7 @@ def stream_openai_completions(
 
         try:
             client = _create_openai_client(openai_sdk, model, options)
-
-            max_tokens = (
-                options.max_tokens
-                if options and options.max_tokens is not None
-                else model.max_tokens
-            )
-            params: dict[str, Any] = {
-                "model": model.id,
-                "messages": _convert_chat_completion_messages(model, context),
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "max_completion_tokens": max_tokens,
-            }
-
-            if options and options.temperature is not None:
-                params["temperature"] = options.temperature
-            if model.reasoning and options and options.reasoning_effort:
-                params["reasoning_effort"] = options.reasoning_effort
-            if options and options.tool_choice is not None:
-                params["tool_choice"] = options.tool_choice
-            if options and options.response_format is not None:
-                params["response_format"] = options.response_format
-            if options and options.parallel_tool_calls is not None:
-                params["parallel_tool_calls"] = options.parallel_tool_calls
-            if options and options.prompt_cache_key:
-                params["prompt_cache_key"] = options.prompt_cache_key
-            if options and options.prompt_cache_retention:
-                params["prompt_cache_retention"] = options.prompt_cache_retention
-            if options and options.service_tier:
-                params["service_tier"] = options.service_tier
-            if options and options.verbosity:
-                params["verbosity"] = options.verbosity
-            params["store"] = options.store if options and options.store is not None else False
-
-            tools = _convert_chat_completion_tools(context.tools)
-            if tools:
-                params["tools"] = tools
+            params = _build_chat_completion_params(model, context, options)
 
             event_stream.push(StartEvent(partial=output))
 
@@ -1202,6 +1290,7 @@ def stream_openai_completions(
             tool_indexes: dict[int, int] = {}
             tool_json_bufs: dict[int, str] = {}
             closed_tool_indexes: set[int] = set()
+            reasoning_fields = _chat_reasoning_fields(model)
 
             response = await client.chat.completions.create(**params)
             async for chunk in response:
@@ -1242,6 +1331,7 @@ def stream_openai_completions(
                     delta,
                     output,
                     event_stream,
+                    reasoning_fields=reasoning_fields,
                     active_text_index=active_text_index,
                     active_thinking_index=active_thinking_index,
                     tool_indexes=tool_indexes,

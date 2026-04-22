@@ -38,6 +38,16 @@ class TestModelRegistry:
         assert model.context_window == 1_048_576
         assert model.max_tokens == 65_536
 
+    def test_get_builtin_opencode_go_kimi_model(self):
+        model = get_model("kimi-k2.6", provider="opencode-go")
+        assert model is not None
+        assert model.api == "openai-completions"
+        assert model.reasoning is True
+        assert model.base_url == "https://opencode.ai/zen/go/v1"
+        assert model.openai_chat_compat is not None
+        assert model.openai_chat_compat.replay_thinking_field == "reasoning_content"
+        assert model.openai_chat_compat.max_tokens_field == "max_tokens"
+
     def test_updated_model_capabilities(self):
         gpt_54 = get_model("gpt-5.4", provider="openai")
         haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")

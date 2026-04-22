@@ -18,9 +18,10 @@ from bampy.ai.models import get_model
 from bampy.ai.types import (
     AssistantMessage,
     Context,
-    OpenAIOptions,
     ImageContent,
     Model,
+    OpenAIChatCompat,
+    OpenAIOptions,
     SimpleStreamOptions,
     StopReason,
     TextContent,
@@ -84,6 +85,28 @@ def _chat_model(*, reasoning: bool = False, input_types: list[str] | None = None
         input_types=input_types or ["text", "image"],
         base_url="https://api.openai.com/v1",
         max_tokens=16384,
+    )
+
+
+def _kimi_chat_model() -> Model:
+    return Model(
+        id="kimi-k2.6",
+        name="Kimi K2.6",
+        api="openai-completions",
+        provider="opencode-go",
+        reasoning=True,
+        input_types=["text", "image"],
+        base_url="https://opencode.ai/zen/go/v1",
+        max_tokens=65536,
+        openai_chat_compat=OpenAIChatCompat(
+            max_tokens_field="max_tokens",
+            replay_thinking_field="reasoning_content",
+            stream_reasoning_fields=["reasoning_content"],
+            supports_reasoning_effort=False,
+            thinking_param="kimi",
+            thinking_default_enabled=True,
+            thinking_tool_choice=["auto", "none"],
+        ),
     )
 
 
@@ -438,6 +461,25 @@ class TestChatCompletionMessageConversion:
         assert items[0]["content"] == "final answer"
         assert items[0]["reasoning_content"] == "deep thought"
 
+    def test_kimi_reasoning_replay_falls_back_to_reasoning_content(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="opencode-go",
+            model="kimi-k2.6",
+            content=[
+                ThinkingContent(thinking="deep thought"),
+                TextContent(text="final answer"),
+            ],
+        )
+        ctx = Context(messages=[assistant])
+        items = _convert_chat_completion_messages(_kimi_chat_model(), ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "final answer"
+        assert items[0]["reasoning_content"] == "deep thought"
+
 
 class TestOpenAIOptions:
     def test_default(self):
@@ -544,6 +586,47 @@ class _FakeAsyncIterator:
 
 
 class TestChatCompletionStreaming:
+    def test_build_chat_completion_params_for_kimi_uses_compat_fields(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        model = _kimi_chat_model()
+        params = _build_chat_completion_params(
+            model,
+            Context(messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="test-key", max_tokens=321, reasoning_effort="high"),
+        )
+
+        assert params["max_tokens"] == 321
+        assert "max_completion_tokens" not in params
+        assert params["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in params
+
+    def test_build_chat_completion_params_rejects_invalid_tool_choice_for_kimi(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        model = _kimi_chat_model()
+        ctx = Context(
+            messages=[UserMessage(content="Check the weather")],
+            tools=[
+                Tool(
+                    name="get_weather",
+                    description="Get weather info",
+                    parameters={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                ),
+            ],
+        )
+
+        with pytest.raises(ValueError, match="tool_choice"):
+            _build_chat_completion_params(
+                model,
+                ctx,
+                OpenAIOptions(api_key="test-key", tool_choice="required"),
+            )
+
     @pytest.mark.asyncio
     async def test_stream_openai_completions_text_and_usage(self, monkeypatch):
         from bampy.ai.providers.openai import stream_openai_completions

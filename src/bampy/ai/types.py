@@ -167,6 +167,16 @@ class ThinkingLevel(StrEnum):
     XHIGH = "xhigh"
 
 
+class OpenAIChatCompat(BaseModel):
+    max_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_completion_tokens"
+    replay_thinking_field: Literal["reasoning_content", "reasoning_details"] | None = None
+    stream_reasoning_fields: list[str] = Field(default_factory=list)
+    supports_reasoning_effort: bool = True
+    thinking_param: Literal["none", "kimi"] = "none"
+    thinking_default_enabled: bool = False
+    thinking_tool_choice: list[Literal["auto", "none", "required"]] | None = None
+
+
 class Model(BaseModel):
     id: str
     name: str
@@ -179,6 +189,7 @@ class Model(BaseModel):
     max_tokens: int = 16384
     cost: ModelCost = Field(default_factory=ModelCost)
     headers: dict[str, str] | None = None
+    openai_chat_compat: OpenAIChatCompat | None = None
 
 
 # ---------------------------------------------------------------------------
