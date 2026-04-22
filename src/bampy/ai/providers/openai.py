@@ -198,7 +198,8 @@ def _chat_reasoning_fields(model: Model) -> tuple[str, ...]:
     """Return reasoning delta fields recognized by the chat-completions path."""
     compat = model.openai_chat_compat
     if compat and compat.stream_reasoning_fields:
-        return tuple(compat.stream_reasoning_fields)
+        fields = list(dict.fromkeys([*compat.stream_reasoning_fields, *_CHAT_REASONING_FIELDS]))
+        return tuple(fields)
     return _CHAT_REASONING_FIELDS
 
 
@@ -603,7 +604,7 @@ def _convert_chat_completion_messages(
                 assistant["tool_calls"] = tool_calls
 
             has_content = assistant["content"] not in (None, "")
-            has_reasoning = any(field in assistant for field in _CHAT_REASONING_FIELDS)
+            has_reasoning = any(field in assistant for field in _chat_reasoning_fields(model))
             if has_content or tool_calls or has_reasoning:
                 messages.append(assistant)
 

@@ -820,6 +820,135 @@ class TestChatCompletionStreaming:
         assert tool_calls[0].name == "search"
         assert tool_calls[0].arguments == {"q": "test"}
 
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_reasoning_content_from_model_extra(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_reasoning",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content=None,
+                            refusal=None,
+                            tool_calls=None,
+                            model_extra={"reasoning_content": "deep thought"},
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_reasoning",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content="done", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    total_tokens=11,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        result = await stream_openai_completions(
+            _kimi_chat_model(),
+            Context(messages=[UserMessage(content="Think first, then answer")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert result.stop_reason == StopReason.STOP
+        assert any(
+            isinstance(block, ThinkingContent) and block.thinking == "deep thought"
+            for block in result.content
+        )
+        assert any(
+            isinstance(block, TextContent) and block.text == "done"
+            for block in result.content
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_kimi_keeps_reasoning_field_fallback(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai_completions
+
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_reasoning_fallback",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content="",
+                            refusal=None,
+                            tool_calls=None,
+                            model_extra={"reasoning": "deep thought"},
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_reasoning_fallback",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content="OK", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    total_tokens=11,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+        result = await stream_openai_completions(
+            _kimi_chat_model(),
+            Context(messages=[UserMessage(content="Think first, then answer")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert any(
+            isinstance(block, ThinkingContent)
+            and block.thinking == "deep thought"
+            and block.thinking_signature == "reasoning"
+            for block in result.content
+        )
+        assert any(
+            isinstance(block, TextContent) and block.text == "OK"
+            for block in result.content
+        )
+
 
 # ---------------------------------------------------------------------------
 # Live integration tests — require GPT_API_KEY

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from bampy.ai.types import AssistantMessage, ImageContent, TextContent, UserMessage
+from bampy.ai.types import AssistantMessage, ImageContent, TextContent, ThinkingContent, UserMessage
 from bampy.app.messages import convert_app_messages_to_llm
 from bampy.app.session import (
     InMemoryBackend,
@@ -128,6 +128,37 @@ class TestSessionPersistence:
             "message",
             "message",
         ]
+
+    def test_persistence_keeps_assistant_thinking_blocks(self):
+        backend = InMemoryBackend()
+        sm = SessionManager("/repo", backend=backend, persist=True)
+
+        sm.append_message(UserMessage(content="think first"))
+        sm.append_message(
+            AssistantMessage(
+                api="openai-completions",
+                provider="opencode-go",
+                model="kimi-k2.6",
+                content=[
+                    ThinkingContent(
+                        thinking="deep thought",
+                        thinking_signature="reasoning_content",
+                    ),
+                    TextContent(text="done"),
+                ],
+            )
+        )
+
+        raw_entries = backend.read_all()
+        assistant = raw_entries[-1]["message"]
+        assert assistant["role"] == "assistant"
+        assert assistant["content"][0] == {
+            "type": "thinking",
+            "thinking": "deep thought",
+            "thinking_signature": "reasoning_content",
+            "redacted": False,
+        }
+        assert assistant["content"][1]["text"] == "done"
 
     def test_build_session_info_reads_persisted_file(self, tmp_path: Path):
         sm = SessionManager(
