@@ -290,6 +290,7 @@ def _build_chat_completion_params(
         "stream_options": {"include_usage": True},
         _chat_max_tokens_field(model): max_tokens,
     }
+    extra_body: dict[str, Any] = {}
 
     if options and options.temperature is not None:
         params["temperature"] = options.temperature
@@ -319,7 +320,12 @@ def _build_chat_completion_params(
     _validate_chat_tool_choice(model, options, has_tools=bool(tools))
     compat = model.openai_chat_compat
     if compat and compat.thinking_param == "kimi":
-        params["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+        extra_body["thinking"] = {
+            "type": "enabled" if thinking_enabled else "disabled"
+        }
+
+    if extra_body:
+        params["extra_body"] = extra_body
 
     return params
 

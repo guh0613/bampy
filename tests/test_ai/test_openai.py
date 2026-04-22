@@ -598,7 +598,8 @@ class TestChatCompletionStreaming:
 
         assert params["max_tokens"] == 321
         assert "max_completion_tokens" not in params
-        assert params["thinking"] == {"type": "enabled"}
+        assert params["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert "thinking" not in params
         assert "reasoning_effort" not in params
 
     def test_build_chat_completion_params_rejects_invalid_tool_choice_for_kimi(self):
