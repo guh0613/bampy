@@ -69,6 +69,18 @@ def _opts(**kw) -> AnthropicOptions:
     return AnthropicOptions(api_key=_API_KEY, headers=headers, **kw)
 
 
+def _unit_model(*, model_id: str = "claude-sonnet-4-6", reasoning: bool = True) -> Model:
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="anthropic-messages",
+        provider="anthropic",
+        reasoning=reasoning,
+        input_types=["text", "image"],
+        max_tokens=16384,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — message / tool conversion (no API call)
 # ---------------------------------------------------------------------------
@@ -78,8 +90,9 @@ class TestMessageConversion:
     def test_user_text(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[UserMessage(content="hello")])
-        system, messages = _convert_messages(ctx)
+        system, messages = _convert_messages(model, ctx)
         assert system is None
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
@@ -88,24 +101,26 @@ class TestMessageConversion:
     def test_system_prompt(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(
             system_prompt="You are helpful.",
             messages=[UserMessage(content="hi")],
         )
-        system, messages = _convert_messages(ctx)
+        system, messages = _convert_messages(model, ctx)
         assert system == "You are helpful."
         assert messages[0]["role"] == "user"
 
     def test_assistant_text_and_tool_call(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             AssistantMessage(content=[
                 TextContent(text="Let me check."),
                 ToolCall(id="toolu_1", name="search", arguments={"q": "test"}),
             ]),
         ])
-        _, messages = _convert_messages(ctx)
+        _, messages = _convert_messages(model, ctx)
         content = messages[0]["content"]
         assert content[0]["type"] == "text"
         assert content[0]["text"] == "Let me check."
@@ -115,6 +130,7 @@ class TestMessageConversion:
     def test_tool_result_grouped(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             ToolResultMessage(
                 tool_call_id="toolu_1", tool_name="a",
@@ -125,7 +141,7 @@ class TestMessageConversion:
                 content=[TextContent(text="res2")],
             ),
         ])
-        _, messages = _convert_messages(ctx)
+        _, messages = _convert_messages(model, ctx)
         # Should be grouped into one user message
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
@@ -134,13 +150,19 @@ class TestMessageConversion:
     def test_thinking_preserved_in_conversion(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
-            AssistantMessage(content=[
-                ThinkingContent(thinking="deep thought", thinking_signature="sig123"),
-                TextContent(text="The answer."),
-            ]),
+            AssistantMessage(
+                api="anthropic-messages",
+                provider="anthropic",
+                model=model.id,
+                content=[
+                    ThinkingContent(thinking="deep thought", thinking_signature="sig123"),
+                    TextContent(text="The answer."),
+                ],
+            ),
         ])
-        _, messages = _convert_messages(ctx)
+        _, messages = _convert_messages(model, ctx)
         content = messages[0]["content"]
         assert content[0]["type"] == "thinking"
         assert content[0]["thinking"] == "deep thought"
@@ -150,13 +172,19 @@ class TestMessageConversion:
     def test_redacted_thinking(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
-            AssistantMessage(content=[
-                ThinkingContent(thinking="", thinking_signature="opaque-payload", redacted=True),
-                TextContent(text="answer"),
-            ]),
+            AssistantMessage(
+                api="anthropic-messages",
+                provider="anthropic",
+                model=model.id,
+                content=[
+                    ThinkingContent(thinking="", thinking_signature="opaque-payload", redacted=True),
+                    TextContent(text="answer"),
+                ],
+            ),
         ])
-        _, messages = _convert_messages(ctx)
+        _, messages = _convert_messages(model, ctx)
         content = messages[0]["content"]
         assert content[0]["type"] == "redacted_thinking"
         assert content[0]["data"] == "opaque-payload"
@@ -164,17 +192,39 @@ class TestMessageConversion:
     def test_image_content(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             UserMessage(content=[
                 TextContent(text="What is this?"),
                 ImageContent(data="aGVsbG8=", mime_type="image/png"),
             ]),
         ])
-        _, messages = _convert_messages(ctx)
+        _, messages = _convert_messages(model, ctx)
         content = messages[0]["content"]
         assert len(content) == 2
         assert content[1]["type"] == "image"
         assert content[1]["source"]["media_type"] == "image/png"
+
+    def test_cross_model_thinking_downgraded_to_text(self):
+        from bampy.ai.providers.anthropic import _convert_messages
+
+        model = _unit_model(model_id="claude-sonnet-4-6")
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="anthropic-messages",
+                provider="anthropic",
+                model="claude-opus-4-6",
+                content=[
+                    ThinkingContent(thinking="deep thought", thinking_signature="sig123"),
+                    TextContent(text="The answer."),
+                ],
+            ),
+        ])
+
+        _, messages = _convert_messages(model, ctx)
+        content = messages[0]["content"]
+        assert content[0] == {"type": "text", "text": "deep thought"}
+        assert content[1] == {"type": "text", "text": "The answer."}
 
 
 class TestToolConversion:
@@ -414,18 +464,27 @@ class TestLiveToolCalling:
         assert "toolcall_end" in event_types
 
     async def test_multi_turn_with_tool_result(self):
-        """Full tool-use loop: user -> model(tool_call) -> tool_result -> model(text)."""
+        """Full reasoning tool-use loop preserves Anthropic thinking replay across turns."""
         from bampy.ai.providers.anthropic import stream_anthropic
 
         model = _model()
+        opts = _opts(
+            thinking=AnthropicThinkingEnabled(budget_tokens=4096),
+            interleaved_thinking=True,
+        )
 
         # Turn 1: user asks, model calls tool
         ctx1 = Context(
-            messages=[UserMessage(content="What is the weather in London?")],
+            system_prompt="Think before every tool call and always use the weather tool when relevant.",
+            messages=[UserMessage(content="What is the weather in London? Use the tool and reason briefly first.")],
             tools=[self._WEATHER_TOOL],
         )
-        result1 = await stream_anthropic(model, ctx1, _opts()).result()
+        result1 = await stream_anthropic(model, ctx1, opts).result()
         assert result1.stop_reason == StopReason.TOOL_USE
+
+        thinking_blocks = [b for b in result1.content if isinstance(b, ThinkingContent)]
+        assert thinking_blocks, "Expected thinking content before the tool call"
+        assert any(b.thinking_signature for b in thinking_blocks), "Expected replayable thinking signature"
 
         tool_calls = [b for b in result1.content if isinstance(b, ToolCall)]
         assert len(tool_calls) >= 1
@@ -433,6 +492,7 @@ class TestLiveToolCalling:
 
         # Turn 2: provide tool result, get final answer
         ctx2 = Context(
+            system_prompt=ctx1.system_prompt,
             messages=[
                 UserMessage(content="What is the weather in London?"),
                 result1,
@@ -444,7 +504,7 @@ class TestLiveToolCalling:
             ],
             tools=[self._WEATHER_TOOL],
         )
-        result2 = await stream_anthropic(model, ctx2, _opts()).result()
+        result2 = await stream_anthropic(model, ctx2, opts).result()
 
         assert result2.stop_reason == StopReason.STOP
         text = "".join(

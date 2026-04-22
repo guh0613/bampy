@@ -39,7 +39,7 @@ from bampy.ai.types import (
 )
 from bampy.ai.models import calculate_cost
 from bampy.ai.providers._cancellation import spawn_provider_task
-from bampy.ai.providers._transform import sanitize_tool_call_id
+from bampy.ai.providers._transform import sanitize_tool_call_id, transform_messages
 
 
 _DEFAULT_USER_AGENT = (
@@ -197,6 +197,7 @@ def _append_beta_header(headers: dict[str, str], value: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _convert_messages(
+    model: Model,
     context: Context,
 ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Convert context to Anthropic ``system`` and ``messages`` params."""
@@ -204,8 +205,15 @@ def _convert_messages(
 
     system = context.system_prompt
     messages: list[dict[str, Any]] = []
+    transformed = transform_messages(
+        context.messages,
+        target_model=model.id,
+        target_provider=model.provider,
+        target_api=model.api,
+        normalize_id=lambda tool_call_id, _source: sanitize_tool_call_id(tool_call_id),
+    )
 
-    for msg in context.messages:
+    for msg in transformed:
         if isinstance(msg, UserMessage):
             messages.append({
                 "role": "user",
@@ -400,7 +408,7 @@ def stream_anthropic(
             client = anthropic_sdk.AsyncAnthropic(**client_kwargs)
 
             # Build params
-            system, messages = _convert_messages(context)
+            system, messages = _convert_messages(model, context)
             max_tokens = (options.max_tokens if options and options.max_tokens else None) or model.max_tokens
 
             params: dict[str, Any] = {

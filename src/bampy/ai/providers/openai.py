@@ -6,6 +6,7 @@ Completions API (``openai-completions``).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -89,7 +90,7 @@ def _serialize_sdk_item(item: Any) -> str | None:
 
 def _parse_reasoning_signature(signature: str | None) -> dict[str, Any] | None:
     """Decode a previously stored reasoning item."""
-    if not signature:
+    if not isinstance(signature, str) or not signature:
         return None
     try:
         item = json.loads(signature)
@@ -106,6 +107,42 @@ def _split_openai_tool_call_id(tool_call_id: str) -> tuple[str, str | None]:
         call_id, item_id = tool_call_id.split("|", 1)
         return sanitize_tool_call_id(call_id), sanitize_tool_call_id(item_id)
     return sanitize_tool_call_id(tool_call_id), None
+
+
+def _normalize_responses_id_part(part: str) -> str:
+    """Normalize a Responses API identifier segment."""
+    sanitized = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in part)
+    return sanitized[:64].rstrip("_")
+
+
+def _build_foreign_responses_item_id(item_id: str) -> str:
+    """Build a stable foreign item id compatible with Responses API."""
+    digest = hashlib.sha256(item_id.encode("utf-8")).hexdigest()[:16]
+    return f"fc_{digest}"
+
+
+def _normalize_responses_tool_call_id(
+    tool_call_id: str,
+    source: AssistantMessage,
+    model: Model,
+) -> str:
+    """Normalize a tool-call id for Responses API history replay."""
+    if "|" not in tool_call_id:
+        return _normalize_responses_id_part(tool_call_id)
+
+    call_id, item_id = tool_call_id.split("|", 1)
+    normalized_call_id = _normalize_responses_id_part(call_id)
+    is_foreign_tool_call = source.provider != model.provider or source.api != model.api
+    normalized_item_id = (
+        _build_foreign_responses_item_id(item_id)
+        if is_foreign_tool_call
+        else _normalize_responses_id_part(item_id)
+    )
+    if not normalized_item_id.startswith("fc_"):
+        normalized_item_id = _normalize_responses_id_part(f"fc_{normalized_item_id}")
+    if not normalized_item_id:
+        normalized_item_id = _build_foreign_responses_item_id(item_id)
+    return f"{normalized_call_id}|{normalized_item_id}"
 
 
 def _supports_multimodal_tool_results(model: Model) -> bool:
@@ -162,6 +199,7 @@ def _option_value(obj: Any, name: str) -> Any:
 # ---------------------------------------------------------------------------
 
 def _convert_messages(
+    model: Model,
     context: Context,
     *,
     allow_tool_result_images: bool = False,
@@ -170,16 +208,29 @@ def _convert_messages(
     items: list[dict[str, Any]] = []
 
     if context.system_prompt:
-        items.append({"role": "developer", "content": context.system_prompt})
+        items.append({
+            "role": "developer" if model.reasoning else "system",
+            "content": context.system_prompt,
+        })
 
-    for msg in context.messages:
+    transformed = transform_messages(
+        context.messages,
+        target_model=model.id,
+        target_provider=model.provider,
+        target_api=model.api,
+        normalize_id=lambda tool_call_id, source: _normalize_responses_tool_call_id(
+            tool_call_id, source, model
+        ),
+    )
+
+    for msg in transformed:
         if isinstance(msg, UserMessage):
             items.append({
                 "role": "user",
                 "content": _convert_user_content(msg.content),
             })
         elif isinstance(msg, AssistantMessage):
-            _convert_assistant_items(msg, items)
+            _convert_assistant_items(model, msg, items)
         elif isinstance(msg, ToolResultMessage):
             items.append({
                 "type": "function_call_output",
@@ -207,11 +258,17 @@ def _convert_user_content(content: str | list[Any]) -> str | list[dict[str, Any]
 
 
 def _convert_assistant_items(
+    model: Model,
     msg: AssistantMessage,
     items: list[dict[str, Any]],
 ) -> None:
     """Convert an assistant message to Responses API input items."""
     text_parts: list[str] = []
+    is_different_model = (
+        msg.model != model.id
+        and msg.provider == model.provider
+        and msg.api == model.api
+    )
 
     for block in msg.content:
         if isinstance(block, TextContent):
@@ -228,6 +285,8 @@ def _convert_assistant_items(
                 items.append({"role": "assistant", "content": "\n".join(text_parts)})
                 text_parts.clear()
             call_id, item_id = _split_openai_tool_call_id(block.id)
+            if is_different_model and item_id and item_id.startswith("fc_"):
+                item_id = None
             items.append({
                 "type": "function_call",
                 "call_id": call_id,
@@ -302,7 +361,7 @@ def _convert_tools(tools: list[Any] | None) -> list[dict[str, Any]] | None:
 # Message conversion (bampy -> OpenAI Chat Completions format)
 # ---------------------------------------------------------------------------
 
-def _normalize_chat_tool_call_id(tool_call_id: str) -> str:
+def _normalize_chat_tool_call_id(tool_call_id: str, _source: AssistantMessage | None = None) -> str:
     """Normalize tool call ids for Chat Completions history replay."""
     return sanitize_tool_call_id(tool_call_id.split("|", 1)[0])
 
@@ -517,6 +576,7 @@ def stream_openai(
             params: dict[str, Any] = {
                 "model": model.id,
                 "input": _convert_messages(
+                    model,
                     context,
                     allow_tool_result_images=_supports_multimodal_tool_results(model),
                 ),

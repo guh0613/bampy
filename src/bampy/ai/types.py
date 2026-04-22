@@ -29,13 +29,13 @@ def time_ms() -> float:
 class TextContent(BaseModel):
     type: Literal["text"] = "text"
     text: str
-    text_signature: str | None = None
+    text_signature: str | bytes | None = None
 
 
 class ThinkingContent(BaseModel):
     type: Literal["thinking"] = "thinking"
     thinking: str
-    thinking_signature: str | None = None
+    thinking_signature: str | bytes | None = None
     redacted: bool = False
 
 

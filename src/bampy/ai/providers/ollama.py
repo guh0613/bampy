@@ -117,7 +117,7 @@ def stream_ollama(
 
             client = openai_sdk.AsyncOpenAI(**client_kwargs)
 
-            input_items = _convert_messages(context)
+            input_items = _convert_messages(model, context)
             max_tokens = (
                 (options.max_tokens if options and options.max_tokens else None)
                 or model.max_tokens

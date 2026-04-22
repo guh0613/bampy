@@ -11,6 +11,7 @@ from typing import Any
 from bampy.ai.models import calculate_cost
 from bampy.ai.providers._cancellation import spawn_provider_task
 from bampy.ai.api_registry import ApiProviderEntry
+from bampy.ai.providers._transform import sanitize_tool_call_id, transform_messages
 from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
     AssistantMessage,
@@ -49,6 +50,7 @@ _THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.HIGH: 16384,
     ThinkingLevel.XHIGH: 16384,
 }
+_SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 
 
 # ---------------------------------------------------------------------------
@@ -60,27 +62,63 @@ def _supports_multimodal_tool_result(model_id: str) -> bool:
     return model_id.startswith("gemini-3")
 
 
-def _convert_messages(context: Context, *, model_id: str = "") -> list[Any]:
+def _requires_tool_call_id(model_id: str) -> bool:
+    """Whether function call / response ids must be explicitly preserved."""
+    return model_id.startswith("claude-") or model_id.startswith("gpt-oss-")
+
+
+def _normalize_gemini_tool_call_id(tool_call_id: str, model_id: str) -> str:
+    """Normalize ids only for models that require explicit tool call ids."""
+    if not _requires_tool_call_id(model_id):
+        return tool_call_id
+    return sanitize_tool_call_id(tool_call_id)
+
+
+def _retain_thought_signature(
+    existing: str | bytes | None,
+    incoming: bytes | None,
+) -> str | bytes | None:
+    """Keep the last non-empty thought signature seen for a block."""
+    if incoming:
+        return incoming
+    return existing
+
+
+def _convert_messages(model: Model, context: Context) -> list[Any]:
     """Convert context messages to Gemini contents format."""
     from google.genai import types
 
     from bampy.ai.types import AssistantMessage, ToolResultMessage, UserMessage
 
-    multimodal_tr = _supports_multimodal_tool_result(model_id)
+    multimodal_tr = _supports_multimodal_tool_result(model.id)
     contents: list[Any] = []
+    transformed = transform_messages(
+        context.messages,
+        target_model=model.id,
+        target_provider=model.provider,
+        target_api=model.api,
+        normalize_id=lambda tool_call_id, _source: _normalize_gemini_tool_call_id(
+            tool_call_id, model.id
+        ),
+    )
 
-    for msg in context.messages:
+    for msg in transformed:
         if isinstance(msg, UserMessage):
             parts = _convert_user_parts(msg.content)
             contents.append(types.Content(role="user", parts=parts))
 
         elif isinstance(msg, AssistantMessage):
-            parts = _convert_assistant_parts(msg.content)
+            parts = _convert_assistant_parts(model, msg.content)
             if parts:
                 contents.append(types.Content(role="model", parts=parts))
 
         elif isinstance(msg, ToolResultMessage):
-            _append_tool_result(contents, msg, multimodal=multimodal_tr)
+            _append_tool_result(
+                contents,
+                msg,
+                multimodal=multimodal_tr,
+                model_id=model.id,
+            )
 
     return contents
 
@@ -106,33 +144,53 @@ def _convert_user_parts(content: str | list) -> list[Any]:
     return parts or [types.Part(text="")]
 
 
-def _convert_assistant_parts(content: list) -> list[Any]:
+def _convert_assistant_parts(model: Model, content: list) -> list[Any]:
     """Convert assistant content blocks to Gemini Parts."""
     from google.genai import types
 
     parts: list[Any] = []
     for item in content:
         if isinstance(item, TextContent):
-            parts.append(types.Part(text=item.text))
+            if not item.text and not item.text_signature:
+                continue
+            part_kwargs: dict[str, Any] = {"text": item.text}
+            if isinstance(item.text_signature, bytes) and item.text_signature:
+                part_kwargs["thought_signature"] = item.text_signature
+            parts.append(types.Part(**part_kwargs))
         elif isinstance(item, ThinkingContent):
-            # Gemini doesn't accept thinking blocks in input; skip
-            pass
+            if not item.thinking and not isinstance(item.thinking_signature, bytes):
+                continue
+            part_kwargs = {
+                "thought": True,
+                "text": item.thinking,
+            }
+            if isinstance(item.thinking_signature, bytes) and item.thinking_signature:
+                part_kwargs["thought_signature"] = item.thinking_signature
+            parts.append(types.Part(**part_kwargs))
         elif isinstance(item, ToolCall):
-            fc = types.FunctionCall(
-                name=item.name,
-                args=item.arguments,
-                id=item.id,
-            )
+            fc_kwargs: dict[str, Any] = {
+                "name": item.name,
+                "args": item.arguments,
+            }
+            if _requires_tool_call_id(model.id):
+                fc_kwargs["id"] = item.id
+            fc = types.FunctionCall(**fc_kwargs)
             part_kwargs: dict[str, Any] = {"function_call": fc}
-            # Restore thought_signature for Gemini 3.x models
-            if item.thought_signature is not None:
-                part_kwargs["thought_signature"] = item.thought_signature
+            effective_signature = item.thought_signature
+            if effective_signature is None and model.id.startswith("gemini-3"):
+                effective_signature = _SKIP_THOUGHT_SIGNATURE
+            if effective_signature is not None:
+                part_kwargs["thought_signature"] = effective_signature
             parts.append(types.Part(**part_kwargs))
     return parts
 
 
 def _append_tool_result(
-    contents: list[Any], msg: Any, *, multimodal: bool = False,
+    contents: list[Any],
+    msg: Any,
+    *,
+    multimodal: bool = False,
+    model_id: str = "",
 ) -> None:
     """Append a tool result as a user Content with function_response."""
     from google.genai import types
@@ -160,6 +218,8 @@ def _append_tool_result(
         "name": msg.tool_name,
         "response": response_data,
     }
+    if _requires_tool_call_id(model_id):
+        fr_kwargs["id"] = msg.tool_call_id
     if image_parts:
         fr_kwargs["parts"] = image_parts
 
@@ -261,7 +321,7 @@ def stream_gemini(
             client = genai.Client(**client_kwargs)
 
             # Build config
-            contents = _convert_messages(context, model_id=model.id)
+            contents = _convert_messages(model, context)
             config_kwargs: dict[str, Any] = {}
 
             max_tokens = (
@@ -347,6 +407,7 @@ def stream_gemini(
                     fc = getattr(part, "function_call", None)
                     is_thought = getattr(part, "thought", False)
                     text = getattr(part, "text", None)
+                    sig = getattr(part, "thought_signature", None)
 
                     if fc is not None:
                         # End previous block if any
@@ -363,7 +424,6 @@ def stream_gemini(
                             getattr(fc, "id", None)
                             or f"gemini_call_{len(output.content)}"
                         )
-                        sig = getattr(part, "thought_signature", None)
                         tool_call = ToolCall(
                             id=call_id,
                             name=fc.name,
@@ -383,7 +443,7 @@ def stream_gemini(
                             partial=output,
                         ))
 
-                    elif is_thought and text:
+                    elif is_thought and (text is not None or sig is not None):
                         if current_block_type != "thinking":
                             # End previous block
                             if current_block_type is not None:
@@ -392,7 +452,7 @@ def stream_gemini(
                                     content_index, current_block_type,
                                 )
                             # Start thinking block
-                            thinking = ThinkingContent(thinking="")
+                            thinking = ThinkingContent(thinking="", thinking_signature=sig)
                             output.content.append(thinking)
                             content_index = len(output.content) - 1
                             current_block_type = "thinking"
@@ -405,14 +465,18 @@ def stream_gemini(
                         # Delta
                         block = output.content[content_index]
                         if isinstance(block, ThinkingContent):
-                            block.thinking += text
+                            block.thinking += text or ""
+                            block.thinking_signature = _retain_thought_signature(
+                                block.thinking_signature,
+                                sig,
+                            )
                         event_stream.push(ThinkingDeltaEvent(
                             content_index=content_index,
-                            delta=text,
+                            delta=text or "",
                             partial=output,
                         ))
 
-                    elif text:
+                    elif text is not None:
                         if current_block_type != "text":
                             # End previous block
                             if current_block_type is not None:
@@ -421,7 +485,7 @@ def stream_gemini(
                                     content_index, current_block_type,
                                 )
                             # Start text block
-                            text_content = TextContent(text="")
+                            text_content = TextContent(text="", text_signature=sig)
                             output.content.append(text_content)
                             content_index = len(output.content) - 1
                             current_block_type = "text"
@@ -435,6 +499,10 @@ def stream_gemini(
                         block = output.content[content_index]
                         if isinstance(block, TextContent):
                             block.text += text
+                            block.text_signature = _retain_thought_signature(
+                                block.text_signature,
+                                sig,
+                            )
                         event_stream.push(TextDeltaEvent(
                             content_index=content_index,
                             delta=text,

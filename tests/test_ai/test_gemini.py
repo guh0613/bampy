@@ -65,6 +65,18 @@ def _opts(**kw) -> GeminiOptions:
     return GeminiOptions(api_key=_API_KEY, **kw)
 
 
+def _unit_model(*, model_id: str = "gemini-3.1-flash-lite-preview", reasoning: bool = True) -> Model:
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="google-generative-ai",
+        provider="google",
+        reasoning=reasoning,
+        input_types=["text", "image"],
+        max_tokens=16384,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — message / tool conversion (no API call)
 # ---------------------------------------------------------------------------
@@ -74,8 +86,9 @@ class TestMessageConversion:
     def test_user_text(self):
         from bampy.ai.providers.gemini import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[UserMessage(content="hello")])
-        contents = _convert_messages(ctx)
+        contents = _convert_messages(model, ctx)
         assert len(contents) == 1
         assert contents[0].role == "user"
         assert contents[0].parts[0].text == "hello"
@@ -83,14 +96,14 @@ class TestMessageConversion:
     def test_assistant_text_and_tool_call(self):
         from bampy.ai.providers.gemini import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             AssistantMessage(content=[
                 TextContent(text="Let me check."),
                 ToolCall(id="c1", name="search", arguments={"q": "test"}),
             ]),
         ])
-        contents = _convert_messages(ctx)
-        assert len(contents) == 1
+        contents = _convert_messages(model, ctx)
         assert contents[0].role == "model"
         parts = contents[0].parts
         assert parts[0].text == "Let me check."
@@ -99,6 +112,7 @@ class TestMessageConversion:
     def test_tool_result_grouped(self):
         from bampy.ai.providers.gemini import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             ToolResultMessage(
                 tool_call_id="c1", tool_name="a",
@@ -109,36 +123,66 @@ class TestMessageConversion:
                 content=[TextContent(text="res2")],
             ),
         ])
-        contents = _convert_messages(ctx)
+        contents = _convert_messages(model, ctx)
         # Should be grouped into one user Content
         assert len(contents) == 1
         assert len(contents[0].parts) == 2
 
-    def test_thinking_skipped_in_conversion(self):
+    def test_same_model_thinking_preserved_in_conversion(self):
         from bampy.ai.providers.gemini import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
-            AssistantMessage(content=[
-                ThinkingContent(thinking="deep thought"),
-                TextContent(text="The answer."),
-            ]),
+            AssistantMessage(
+                api="google-generative-ai",
+                provider="google",
+                model=model.id,
+                content=[
+                    ThinkingContent(thinking="deep thought", thinking_signature=b"sig-1"),
+                    TextContent(text="The answer."),
+                ],
+            ),
         ])
-        contents = _convert_messages(ctx)
+        contents = _convert_messages(model, ctx)
         parts = contents[0].parts
-        # Only text part, thinking skipped
-        assert len(parts) == 1
-        assert parts[0].text == "The answer."
+        assert len(parts) == 2
+        assert parts[0].thought is True
+        assert parts[0].text == "deep thought"
+        assert parts[0].thought_signature == b"sig-1"
+        assert parts[1].text == "The answer."
+
+    def test_cross_model_thinking_downgraded_to_text(self):
+        from bampy.ai.providers.gemini import _convert_messages
+
+        model = _unit_model(model_id="gemini-3.1-flash-lite-preview")
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="google-generative-ai",
+                provider="google",
+                model="gemini-2.5-flash",
+                content=[
+                    ThinkingContent(thinking="deep thought", thinking_signature=b"sig-1"),
+                    TextContent(text="The answer."),
+                ],
+            ),
+        ])
+        contents = _convert_messages(model, ctx)
+        parts = contents[0].parts
+        assert len(parts) == 2
+        assert parts[0].text == "deep thought"
+        assert parts[1].text == "The answer."
 
     def test_image_content(self):
         from bampy.ai.providers.gemini import _convert_messages
 
+        model = _unit_model()
         ctx = Context(messages=[
             UserMessage(content=[
                 TextContent(text="What is this?"),
                 ImageContent(data="aGVsbG8=", mime_type="image/png"),
             ]),
         ])
-        contents = _convert_messages(ctx)
+        contents = _convert_messages(model, ctx)
         parts = contents[0].parts
         assert len(parts) == 2
         assert parts[1].inline_data.mime_type == "image/png"
@@ -156,7 +200,7 @@ class TestMessageConversion:
             ],
         )
         contents: list = []
-        _append_tool_result(contents, msg, multimodal=True)
+        _append_tool_result(contents, msg, multimodal=True, model_id="gemini-3-flash-preview")
 
         fr = contents[0].parts[0].function_response
         assert fr.name == "screenshot"
@@ -179,7 +223,7 @@ class TestMessageConversion:
             ],
         )
         contents: list = []
-        _append_tool_result(contents, msg, multimodal=False)
+        _append_tool_result(contents, msg, multimodal=False, model_id="gemini-2.5-flash")
 
         fr = contents[0].parts[0].function_response
         assert fr.response == {"result": "Captured.\n[image]"}
@@ -199,12 +243,12 @@ class TestMessageConversion:
             ),
         ])
         # gemini-3 model → inline_data
-        c3 = _convert_messages(ctx, model_id="gemini-3-flash-preview")
+        c3 = _convert_messages(_unit_model(model_id="gemini-3-flash-preview"), ctx)
         fr3 = c3[0].parts[0].function_response
         assert fr3.parts is not None
 
         # gemini-2 model → fallback text
-        c2 = _convert_messages(ctx, model_id="gemini-2.5-flash")
+        c2 = _convert_messages(_unit_model(model_id="gemini-2.5-flash"), ctx)
         fr2 = c2[0].parts[0].function_response
         assert fr2.parts is None
         assert "[image]" in fr2.response["result"]
@@ -219,11 +263,46 @@ class TestMessageConversion:
             content=[TextContent(text="Some info")],
         )
         contents: list = []
-        _append_tool_result(contents, msg)
+        _append_tool_result(contents, msg, model_id="gemini-3-flash-preview")
 
         fr = contents[0].parts[0].function_response
         assert fr.response == {"result": "Some info"}
         assert fr.parts is None
+
+    def test_same_model_text_signature_roundtrips(self):
+        from bampy.ai.providers.gemini import _convert_messages
+
+        model = _unit_model()
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="google-generative-ai",
+                provider="google",
+                model=model.id,
+                content=[TextContent(text="Done.", text_signature=b"sig-text")],
+            ),
+        ])
+
+        contents = _convert_messages(model, ctx)
+        assert contents[0].parts[0].text == "Done."
+        assert contents[0].parts[0].thought_signature == b"sig-text"
+
+    def test_gemini3_missing_tool_signature_uses_skip_validator(self):
+        from bampy.ai.providers.gemini import _convert_messages
+
+        model = _unit_model(model_id="gemini-3-flash-preview")
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="anthropic-messages",
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                content=[ToolCall(id="toolu_1", name="search", arguments={"q": "test"})],
+            ),
+        ])
+
+        contents = _convert_messages(model, ctx)
+        part = contents[0].parts[0]
+        assert part.function_call.name == "search"
+        assert part.thought_signature == b"skip_thought_signature_validator"
 
 
 class TestToolConversion:
@@ -465,25 +544,29 @@ class TestLiveToolCalling:
         assert "toolcall_end" in event_types
 
     async def test_multi_turn_with_tool_result(self):
-        """Full tool-use loop: user → model(tool_call) → tool_result → model(text)."""
+        """Full reasoning tool-use loop preserves Gemini thought signatures across turns."""
         from bampy.ai.providers.gemini import stream_gemini
 
         model = _model()
+        opts = _opts(thinking_budget=4096)
 
         # Turn 1: user asks, model calls tool
         ctx1 = Context(
-            messages=[UserMessage(content="What is the weather in London?")],
+            system_prompt="Think before using tools, and always use the weather tool when relevant.",
+            messages=[UserMessage(content="What is the weather in London? Use the tool and reason briefly first.")],
             tools=[self._WEATHER_TOOL],
         )
-        result1 = await stream_gemini(model, ctx1, _opts()).result()
+        result1 = await stream_gemini(model, ctx1, opts).result()
         assert result1.stop_reason == StopReason.TOOL_USE
 
         tool_calls = [b for b in result1.content if isinstance(b, ToolCall)]
         assert len(tool_calls) >= 1
         tc = tool_calls[0]
+        assert tc.thought_signature is not None, "Expected replayable thought signature on Gemini tool call"
 
         # Turn 2: provide tool result, get final answer
         ctx2 = Context(
+            system_prompt=ctx1.system_prompt,
             messages=[
                 UserMessage(content="What is the weather in London?"),
                 result1,
@@ -495,7 +578,7 @@ class TestLiveToolCalling:
             ],
             tools=[self._WEATHER_TOOL],
         )
-        result2 = await stream_gemini(model, ctx2, _opts()).result()
+        result2 = await stream_gemini(model, ctx2, opts).result()
 
         assert result2.stop_reason == StopReason.STOP
         text = "".join(

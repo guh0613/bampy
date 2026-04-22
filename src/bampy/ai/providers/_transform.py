@@ -16,6 +16,7 @@ from bampy.ai.types import (
 )
 
 _MAX_ID_LEN = 64
+NormalizeId = Callable[[str, AssistantMessage], str]
 
 
 def sanitize_tool_call_id(tool_call_id: str) -> str:
@@ -34,12 +35,12 @@ def transform_messages(
     target_model: str | None = None,
     target_provider: str | None = None,
     target_api: str | None = None,
-    normalize_id: Callable[[str], str] | None = None,
+    normalize_id: NormalizeId | None = None,
 ) -> list[Message]:
     """Transform a message list for cross-provider compatibility.
     """
     if normalize_id is None:
-        normalize_id = sanitize_tool_call_id
+        normalize_id = lambda tool_call_id, _source: sanitize_tool_call_id(tool_call_id)
 
     # Pass 1: per-message transforms
     transformed: list[Message] = []
@@ -57,9 +58,11 @@ def transform_messages(
             transformed.append(new_msg)
 
         elif isinstance(msg, ToolResultMessage):
-            new_id = id_map.get(msg.tool_call_id, normalize_id(msg.tool_call_id))
-            new_msg = msg.model_copy(update={"tool_call_id": new_id})
-            transformed.append(new_msg)
+            new_id = id_map.get(msg.tool_call_id)
+            if new_id is not None and new_id != msg.tool_call_id:
+                transformed.append(msg.model_copy(update={"tool_call_id": new_id}))
+            else:
+                transformed.append(msg)
 
     # Pass 2: insert synthetic tool results for orphaned tool calls
     return _insert_synthetic_results(transformed)
@@ -96,15 +99,22 @@ def _transform_assistant_content(
                 new_content.append(TextContent(text=block.thinking))
 
         elif isinstance(block, ToolCall):
-            new_id = normalize_id(block.id)
+            if same_model:
+                new_content.append(block)
+                continue
+
+            new_id = normalize_id(block.id, msg)
             id_map[block.id] = new_id
             block_update = {"id": new_id}
-            if not same_model and block.thought_signature is not None:
+            if block.thought_signature is not None:
                 block_update["thought_signature"] = None
             new_content.append(block.model_copy(update=block_update))
 
         else:
-            new_content.append(block)
+            if same_model:
+                new_content.append(block)
+            else:
+                new_content.append(TextContent(text=block.text))
 
     return new_content
 

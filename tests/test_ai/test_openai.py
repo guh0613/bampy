@@ -87,6 +87,19 @@ def _chat_model(*, reasoning: bool = False, input_types: list[str] | None = None
     )
 
 
+def _responses_model(*, model_id: str = "gpt-5.4", reasoning: bool = True) -> Model:
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="openai-responses",
+        provider="openai",
+        reasoning=reasoning,
+        input_types=["text", "image"],
+        base_url="https://api.openai.com/v1",
+        max_tokens=16384,
+    )
+
+
 def _live_chat_completions_model(model_id: str = _CHAT_COMPLETIONS_LIVE_MODEL) -> Model:
     return Model(
         id=model_id,
@@ -109,8 +122,9 @@ class TestMessageConversion:
     def test_user_text(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[UserMessage(content="hello")])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         assert len(items) == 1
         assert items[0]["role"] == "user"
         assert items[0]["content"] == "hello"
@@ -118,11 +132,12 @@ class TestMessageConversion:
     def test_system_prompt(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(
             system_prompt="You are helpful.",
             messages=[UserMessage(content="hi")],
         )
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         assert items[0]["role"] == "developer"
         assert items[0]["content"] == "You are helpful."
         assert items[1]["role"] == "user"
@@ -130,13 +145,14 @@ class TestMessageConversion:
     def test_assistant_text_and_tool_call(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
             AssistantMessage(content=[
                 TextContent(text="Let me check."),
                 ToolCall(id="call_1", name="search", arguments={"q": "test"}),
             ]),
         ])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         # Text → assistant message, ToolCall → function_call item
         assert items[0]["role"] == "assistant"
         assert items[0]["content"] == "Let me check."
@@ -146,19 +162,21 @@ class TestMessageConversion:
     def test_tool_result(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
             ToolResultMessage(
                 tool_call_id="call_1", tool_name="search",
                 content=[TextContent(text="result data")],
             ),
         ])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         assert items[0]["type"] == "function_call_output"
         assert items[0]["output"] == "result data"
 
     def test_tool_result_with_image_uses_multimodal_output_when_enabled(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
             ToolResultMessage(
                 tool_call_id="call_1",
@@ -170,7 +188,7 @@ class TestMessageConversion:
             ),
         ])
 
-        items = _convert_messages(ctx, allow_tool_result_images=True)
+        items = _convert_messages(model, ctx, allow_tool_result_images=True)
         output = items[0]["output"]
 
         assert items[0]["type"] == "function_call_output"
@@ -187,6 +205,7 @@ class TestMessageConversion:
     def test_tool_result_with_image_falls_back_to_placeholder_when_disabled(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
             ToolResultMessage(
                 tool_call_id="call_1",
@@ -198,7 +217,7 @@ class TestMessageConversion:
             ),
         ])
 
-        items = _convert_messages(ctx, allow_tool_result_images=False)
+        items = _convert_messages(model, ctx, allow_tool_result_images=False)
 
         assert items[0]["type"] == "function_call_output"
         assert items[0]["output"] == "Read image file [image/png]\n[image]"
@@ -206,13 +225,19 @@ class TestMessageConversion:
     def test_thinking_skipped_in_conversion(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
-            AssistantMessage(content=[
-                ThinkingContent(thinking="deep thought"),
-                TextContent(text="The answer."),
-            ]),
+            AssistantMessage(
+                api="openai-responses",
+                provider="openai",
+                model=model.id,
+                content=[
+                    ThinkingContent(thinking="deep thought"),
+                    TextContent(text="The answer."),
+                ],
+            ),
         ])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         # Only text part, thinking skipped
         assert len(items) == 1
         assert items[0]["role"] == "assistant"
@@ -221,16 +246,22 @@ class TestMessageConversion:
     def test_thinking_roundtrip_preserved_with_signature(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
-            AssistantMessage(content=[
-                ThinkingContent(
-                    thinking="deep thought",
-                    thinking_signature='{"type":"reasoning","id":"rs_123","summary":[{"type":"summary_text","text":"deep thought"}]}',
-                ),
-                TextContent(text="The answer."),
-            ]),
+            AssistantMessage(
+                api="openai-responses",
+                provider="openai",
+                model=model.id,
+                content=[
+                    ThinkingContent(
+                        thinking="deep thought",
+                        thinking_signature='{"type":"reasoning","id":"rs_123","summary":[{"type":"summary_text","text":"deep thought"}]}',
+                    ),
+                    TextContent(text="The answer."),
+                ],
+            ),
         ])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         assert items[0]["type"] == "reasoning"
         assert items[0]["id"] == "rs_123"
         assert items[1]["role"] == "assistant"
@@ -239,17 +270,41 @@ class TestMessageConversion:
     def test_user_multimodal_content(self):
         from bampy.ai.providers.openai import _convert_messages
 
+        model = _responses_model()
         ctx = Context(messages=[
             UserMessage(content=[
                 TextContent(text="What is this?"),
                 ImageContent(data="aGVsbG8=", mime_type="image/png"),
             ]),
         ])
-        items = _convert_messages(ctx)
+        items = _convert_messages(model, ctx)
         content = items[0]["content"]
         assert isinstance(content, list)
         assert content[0]["type"] == "input_text"
         assert content[1]["type"] == "input_image"
+
+    def test_different_model_handoff_omits_responses_item_id(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        model = _responses_model(model_id="gpt-5.2-codex")
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="openai-responses",
+                provider="openai",
+                model="gpt-5-mini",
+                content=[
+                    TextContent(text="Let me check."),
+                    ToolCall(id="call_1|fc_1", name="search", arguments={"q": "test"}),
+                ],
+            ),
+        ])
+
+        items = _convert_messages(model, ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[1]["type"] == "function_call"
+        assert items[1]["call_id"] == "call_1"
+        assert "id" not in items[1]
 
 
 class TestToolConversion:
@@ -872,18 +927,24 @@ class TestLiveToolCalling:
         assert "toolcall_end" in event_types
 
     async def test_multi_turn_with_tool_result(self):
-        """Full tool-use loop: user -> model(tool_call) -> tool_result -> model(text)."""
+        """Full reasoning tool-use loop preserves OpenAI reasoning replay across turns."""
         from bampy.ai.providers.openai import stream_openai
 
         model = _model()
+        opts = _opts(reasoning_effort="high")
 
         # Turn 1: user asks, model calls tool
         ctx1 = Context(
-            messages=[UserMessage(content="What is the weather in London?")],
+            system_prompt="Think carefully before using tools, and always use the tool when asked about weather.",
+            messages=[UserMessage(content="What is the weather in London? Use the tool and reason briefly before acting.")],
             tools=[self._WEATHER_TOOL],
         )
-        result1 = await stream_openai(model, ctx1, _opts()).result()
+        result1 = await stream_openai(model, ctx1, opts).result()
         assert result1.stop_reason == StopReason.TOOL_USE
+
+        thinking_blocks = [b for b in result1.content if isinstance(b, ThinkingContent)]
+        assert thinking_blocks, "Expected reasoning content before the tool call"
+        assert any(b.thinking_signature for b in thinking_blocks), "Expected replayable reasoning signature"
 
         tool_calls = [b for b in result1.content if isinstance(b, ToolCall)]
         assert len(tool_calls) >= 1
@@ -891,6 +952,7 @@ class TestLiveToolCalling:
 
         # Turn 2: provide tool result, get final answer
         ctx2 = Context(
+            system_prompt=ctx1.system_prompt,
             messages=[
                 UserMessage(content="What is the weather in London?"),
                 result1,
@@ -902,7 +964,7 @@ class TestLiveToolCalling:
             ],
             tools=[self._WEATHER_TOOL],
         )
-        result2 = await stream_openai(model, ctx2, _opts()).result()
+        result2 = await stream_openai(model, ctx2, opts).result()
 
         assert result2.stop_reason == StopReason.STOP
         text = "".join(

@@ -60,6 +60,27 @@ class TestTransformMessages:
         assert isinstance(msg.content[0], TextContent)
         assert msg.content[0].text == "reasoning here"
 
+    def test_text_signature_dropped_for_different_model(self):
+        messages = [
+            AssistantMessage(
+                api="google-generative-ai",
+                provider="google",
+                model="gemini-3-flash-preview",
+                content=[TextContent(text="done", text_signature=b"sig")],
+            ),
+        ]
+        result = transform_messages(
+            messages,
+            target_model="claude-sonnet-4-6",
+            target_provider="anthropic",
+            target_api="anthropic-messages",
+        )
+        msg = result[0]
+        assert isinstance(msg, AssistantMessage)
+        assert isinstance(msg.content[0], TextContent)
+        assert msg.content[0].text == "done"
+        assert msg.content[0].text_signature is None
+
     def test_redacted_thinking_skipped_for_different_model(self):
         messages = [
             AssistantMessage(
@@ -145,6 +166,29 @@ class TestTransformMessages:
         tr = result[1]
         assert isinstance(tr, ToolResultMessage)
         assert "@" not in tr.tool_call_id
+
+    def test_same_model_tool_call_ids_preserved(self):
+        messages = [
+            AssistantMessage(
+                api="openai-responses",
+                provider="openai",
+                model="gpt-5.4",
+                content=[ToolCall(id="call_1|fc_1", name="search", arguments={})],
+            ),
+            ToolResultMessage(tool_call_id="call_1|fc_1", tool_name="search", content=[]),
+        ]
+        result = transform_messages(
+            messages,
+            target_model="gpt-5.4",
+            target_provider="openai",
+            target_api="openai-responses",
+        )
+        tc = result[0].content[0]
+        assert isinstance(tc, ToolCall)
+        assert tc.id == "call_1|fc_1"
+        tr = result[1]
+        assert isinstance(tr, ToolResultMessage)
+        assert tr.tool_call_id == "call_1|fc_1"
 
     def test_cross_model_tool_call_drops_thought_signature(self):
         messages = [
