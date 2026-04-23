@@ -7,6 +7,7 @@ Live tests require .env.dev at project root (or environment variables):
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -100,8 +101,8 @@ def _kimi_chat_model() -> Model:
         max_tokens=65536,
         openai_chat_compat=OpenAIChatCompat(
             max_tokens_field="max_tokens",
-            replay_thinking_field="reasoning_content",
-            stream_reasoning_fields=["reasoning_content"],
+            replay_thinking_field="reasoning",
+            stream_reasoning_fields=["reasoning", "reasoning_details"],
             supports_reasoning_effort=False,
             thinking_param="kimi",
             thinking_default_enabled=True,
@@ -461,7 +462,7 @@ class TestChatCompletionMessageConversion:
         assert items[0]["content"] == "final answer"
         assert items[0]["reasoning_content"] == "deep thought"
 
-    def test_kimi_reasoning_replay_falls_back_to_reasoning_content(self):
+    def test_kimi_reasoning_replay_falls_back_to_configured_reasoning_field(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
 
         assistant = AssistantMessage(
@@ -478,7 +479,42 @@ class TestChatCompletionMessageConversion:
 
         assert items[0]["role"] == "assistant"
         assert items[0]["content"] == "final answer"
-        assert items[0]["reasoning_content"] == "deep thought"
+        assert items[0]["reasoning"] == "deep thought"
+
+    def test_kimi_reasoning_replay_keeps_reasoning_details_raw(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        details = [
+            {
+                "type": "reasoning.text",
+                "text": "deep thought",
+                "format": "unknown",
+                "index": 0,
+            }
+        ]
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="opencode-go",
+            model="kimi-k2.6",
+            content=[
+                ThinkingContent(
+                    thinking="deep thought",
+                    thinking_signature="reasoning",
+                ),
+                ThinkingContent(
+                    thinking='[{"type":"reasoning.text","text":"deep thought","format":"unknown","index":0}]',
+                    thinking_signature="reasoning_details",
+                ),
+                TextContent(text="final answer"),
+            ],
+        )
+        ctx = Context(messages=[assistant])
+        items = _convert_chat_completion_messages(_kimi_chat_model(), ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "final answer"
+        assert items[0]["reasoning"] == "deep thought"
+        assert items[0]["reasoning_details"] == details
 
 
 class TestOpenAIOptions:
@@ -531,6 +567,39 @@ class TestReasoningEffortResolution:
 
 
 class TestStreamEventHandling:
+    @pytest.mark.asyncio
+    async def test_stream_openai_includes_encrypted_reasoning_without_explicit_effort(
+        self,
+        monkeypatch,
+    ):
+        from bampy.ai.providers.openai import stream_openai
+
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.responses = SimpleNamespace(create=self._create)
+
+            async def _create(self, **params):
+                captured["params"] = params
+                return _FakeAsyncIterator([])
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai(
+            _responses_model(reasoning=True),
+            Context(messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert result.stop_reason == StopReason.STOP
+        assert captured["params"]["include"] == ["reasoning.encrypted_content"]
+        assert "reasoning" not in captured["params"]
+
     def test_reasoning_item_stores_signature(self):
         from bampy.ai.providers.openai import _handle_stream_event
         from bampy.ai.stream import AssistantMessageEventStream
@@ -948,6 +1017,204 @@ class TestChatCompletionStreaming:
             isinstance(block, TextContent) and block.text == "OK"
             for block in result.content
         )
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_kimi_keeps_reasoning_details_raw(
+        self,
+        monkeypatch,
+    ):
+        from bampy.ai.providers.openai import (
+            _convert_chat_completion_messages,
+            stream_openai_completions,
+        )
+
+        details = [
+            {
+                "type": "reasoning.text",
+                "text": "deep thought",
+                "format": "unknown",
+                "index": 0,
+            }
+        ]
+        details_text = (
+            '[{"type":"reasoning.text","text":"deep thought",'
+            '"format":"unknown","index":0}]'
+        )
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_reasoning_details",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content="",
+                            refusal=None,
+                            tool_calls=None,
+                            model_extra={
+                                "reasoning": "deep thought",
+                                "reasoning_details": details,
+                            },
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_reasoning_details",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content="OK", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    total_tokens=11,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai_completions(
+            _kimi_chat_model(),
+            Context(messages=[UserMessage(content="Think first, then answer")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+        replay = _convert_chat_completion_messages(
+            _kimi_chat_model(),
+            Context(messages=[result]),
+        )
+
+        assert any(
+            isinstance(block, ThinkingContent)
+            and block.thinking == details_text
+            and block.thinking_signature == "reasoning_details"
+            for block in result.content
+        )
+        assert replay[0]["reasoning"] == "deep thought"
+        assert replay[0]["reasoning_details"] == details
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_completions_merges_chunked_reasoning_details(
+        self,
+        monkeypatch,
+    ):
+        from bampy.ai.providers.openai import (
+            _convert_chat_completion_messages,
+            stream_openai_completions,
+        )
+
+        first_detail = {
+            "type": "reasoning.text",
+            "text": "first",
+            "format": "unknown",
+            "index": 0,
+        }
+        second_detail = {
+            "type": "reasoning.text",
+            "text": " thought",
+            "format": "unknown",
+            "index": 0,
+        }
+        merged_detail = {**first_detail, "text": "first thought"}
+        chunks = [
+            SimpleNamespace(
+                id="chatcmpl_chunked_reasoning_details",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content="",
+                            refusal=None,
+                            tool_calls=None,
+                            model_extra={"reasoning_details": [first_detail]},
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_chunked_reasoning_details",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            content="",
+                            refusal=None,
+                            tool_calls=None,
+                            model_extra={"reasoning_details": [second_detail]},
+                        ),
+                    ),
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                id="chatcmpl_chunked_reasoning_details",
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(content="OK", refusal=None, tool_calls=None),
+                    ),
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    total_tokens=11,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            ),
+        ]
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create),
+                )
+
+            async def _create(self, **params):
+                return _FakeAsyncIterator(chunks)
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai_completions(
+            _kimi_chat_model(),
+            Context(messages=[UserMessage(content="Think first, then answer")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+        details_blocks = [
+            block
+            for block in result.content
+            if isinstance(block, ThinkingContent)
+            and block.thinking_signature == "reasoning_details"
+        ]
+        replay = _convert_chat_completion_messages(
+            _kimi_chat_model(),
+            Context(messages=[result]),
+        )
+
+        assert len(details_blocks) == 1
+        assert json.loads(details_blocks[0].thinking) == [merged_detail]
+        assert replay[0]["reasoning_details"] == [merged_detail]
 
 
 # ---------------------------------------------------------------------------

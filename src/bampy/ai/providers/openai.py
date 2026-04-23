@@ -203,25 +203,157 @@ def _chat_reasoning_fields(model: Model) -> tuple[str, ...]:
     return _CHAT_REASONING_FIELDS
 
 
-def _chat_replay_field(model: Model, thinking_blocks: list[ThinkingContent]) -> str | None:
-    """Pick the assistant message field used to replay prior thinking."""
-    reasoning_fields = _chat_reasoning_fields(model)
-    signature = next(
-        (
-            block.thinking_signature
-            for block in thinking_blocks
-            if isinstance(block.thinking_signature, str)
-            and block.thinking_signature in reasoning_fields
-        ),
-        None,
-    )
-    if signature:
-        return signature
+def _jsonable_reasoning_value(value: Any) -> Any:
+    """Convert SDK objects inside non-standard reasoning fields to JSON values."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=True)
+    if isinstance(value, dict):
+        return {key: _jsonable_reasoning_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_reasoning_value(item) for item in value]
+    return value
 
+
+def _chat_reasoning_value_to_text(value: Any) -> str:
+    """Store a reasoning delta in ThinkingContent without losing raw JSON blocks."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(
+        _jsonable_reasoning_value(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _try_parse_json(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _reasoning_detail_key(item: Any) -> tuple[Any, Any, Any] | None:
+    if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+        return None
+    if "index" not in item:
+        return None
+    return (item.get("index"), item.get("type"), item.get("format"))
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _merge_reasoning_details_value(existing: Any, incoming: Any) -> Any:
+    if existing is None:
+        return incoming
+
+    current_items = _as_list(existing)
+    incoming_items = _as_list(incoming)
+    result = [_jsonable_reasoning_value(item) for item in current_items]
+    keyed_positions = {
+        key: pos
+        for pos, item in enumerate(result)
+        if (key := _reasoning_detail_key(item)) is not None
+    }
+
+    for item in incoming_items:
+        item = _jsonable_reasoning_value(item)
+        key = _reasoning_detail_key(item)
+        pos = keyed_positions.get(key) if key is not None else None
+        if pos is None or not isinstance(result[pos], dict):
+            if key is not None:
+                keyed_positions[key] = len(result)
+            result.append(item)
+            continue
+        result[pos] = {
+            **result[pos],
+            "text": result[pos]["text"] + item["text"],
+        }
+
+    if isinstance(existing, list) or isinstance(incoming, list) or len(result) != 1:
+        return result
+    return result[0]
+
+
+def _append_chat_reasoning_value(existing: str, field: str, value: Any) -> str:
+    """Append a reasoning delta while preserving structured reasoning_details."""
+    if field != "reasoning_details":
+        return existing + _chat_reasoning_value_to_text(value)
+
+    incoming = _try_parse_json(value) if isinstance(value, str) else None
+    if incoming is None:
+        if isinstance(value, str):
+            return existing + value
+        incoming = _jsonable_reasoning_value(value)
+
+    if not existing:
+        return _chat_reasoning_value_to_text(incoming)
+
+    current = _try_parse_json(existing)
+    if current is None:
+        return existing + _chat_reasoning_value_to_text(value)
+
+    return _chat_reasoning_value_to_text(
+        _merge_reasoning_details_value(current, incoming)
+    )
+
+
+def _chat_replay_value(field: str, text: str) -> Any:
+    """Convert stored thinking text back to the provider-specific replay value."""
+    if field == "reasoning_details":
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    return text
+
+
+def _merge_chat_replay_value(existing: Any, incoming: Any) -> Any:
+    if existing is None:
+        return incoming
+    if isinstance(existing, str) and isinstance(incoming, str):
+        return "\n".join(part for part in (existing, incoming) if part)
+    if isinstance(existing, list) and isinstance(incoming, list):
+        return [*existing, *incoming]
+    if isinstance(existing, list):
+        return [*existing, incoming]
+    if isinstance(incoming, list):
+        return [existing, *incoming]
+    return [existing, incoming]
+
+
+def _chat_replay_payloads(
+    model: Model,
+    thinking_blocks: list[ThinkingContent],
+) -> dict[str, Any]:
+    """Build assistant reasoning fields used to replay prior chat thinking."""
+    reasoning_fields = _chat_reasoning_fields(model)
     compat = model.openai_chat_compat
-    if compat and compat.replay_thinking_field:
-        return compat.replay_thinking_field
-    return None
+    fallback_field = compat.replay_thinking_field if compat else None
+    payloads: dict[str, Any] = {}
+
+    for block in thinking_blocks:
+        signature = block.thinking_signature
+        field = (
+            signature
+            if isinstance(signature, str) and signature in reasoning_fields
+            else fallback_field
+        )
+        if not field:
+            continue
+        value = _chat_replay_value(field, block.thinking)
+        if field == "reasoning_details":
+            payloads[field] = _merge_reasoning_details_value(
+                payloads.get(field),
+                value,
+            )
+        else:
+            payloads[field] = _merge_chat_replay_value(payloads.get(field), value)
+
+    return payloads
 
 
 def _chat_supports_reasoning_effort(model: Model) -> bool:
@@ -242,7 +374,7 @@ def _chat_thinking_enabled(model: Model, options: OpenAIOptions | None) -> bool:
     if compat is None or compat.thinking_param == "none":
         return False
 
-    if compat.thinking_param == "kimi":
+    if compat.thinking_param in {"kimi", "zai"}:
         if options and options.reasoning_effort == "none":
             return False
         if options and options.reasoning_effort is not None:
@@ -320,7 +452,7 @@ def _build_chat_completion_params(
     thinking_enabled = _chat_thinking_enabled(model, options)
     _validate_chat_tool_choice(model, options, has_tools=bool(tools))
     compat = model.openai_chat_compat
-    if compat and compat.thinking_param == "kimi":
+    if compat and compat.thinking_param in {"kimi", "zai"}:
         extra_body["thinking"] = {
             "type": "enabled" if thinking_enabled else "disabled"
         }
@@ -582,11 +714,7 @@ def _convert_chat_completion_messages(
                 if isinstance(block, ThinkingContent) and block.thinking.strip()
             ]
             if thinking_blocks:
-                signature = _chat_replay_field(model, thinking_blocks)
-                if signature:
-                    assistant[signature] = "\n".join(
-                        block.thinking for block in thinking_blocks
-                    )
+                assistant.update(_chat_replay_payloads(model, thinking_blocks))
 
             tool_calls = [
                 {
@@ -728,8 +856,9 @@ def stream_openai(
             if tools:
                 params["tools"] = tools
 
-            if model.reasoning and options and options.reasoning_effort:
-                params["reasoning"] = {"effort": options.reasoning_effort}
+            if model.reasoning:
+                if options and options.reasoning_effort:
+                    params["reasoning"] = {"effort": options.reasoning_effort}
                 params["include"] = ["reasoning.encrypted_content"]
 
             event_stream.push(StartEvent(partial=output))
@@ -1164,9 +1293,15 @@ def _apply_chat_completion_delta(
         ))
 
     for field in reasoning_fields:
-        reasoning_delta = _option_value(delta, field)
-        if not reasoning_delta:
+        reasoning_value = _option_value(delta, field)
+        if (
+            reasoning_value is None
+            or reasoning_value == ""
+            or reasoning_value == []
+            or reasoning_value == {}
+        ):
             continue
+        reasoning_delta = _chat_reasoning_value_to_text(reasoning_value)
 
         if current_scalar_kind == "text":
             _end_text_block(output, stream, active_text_index)
@@ -1190,7 +1325,11 @@ def _apply_chat_completion_delta(
         current_scalar_kind = "thinking"
         thinking_block = output.content[active_thinking_index]
         if isinstance(thinking_block, ThinkingContent):
-            thinking_block.thinking += reasoning_delta
+            thinking_block.thinking = _append_chat_reasoning_value(
+                thinking_block.thinking,
+                field,
+                reasoning_value,
+            )
         stream.push(ThinkingDeltaEvent(
             content_index=active_thinking_index,
             delta=reasoning_delta,
