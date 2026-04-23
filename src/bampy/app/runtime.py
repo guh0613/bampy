@@ -69,7 +69,7 @@ from .extension import (
 )
 from .loader import LoadExtensionsResult, load_extensions
 from .messages import create_custom_message, register_app_message_converters
-from .session import CompactionEntry, SessionManager
+from .session import CompactionEntry, SessionManager, SessionMessageEntry
 from .skills import LoadSkillsResult, Skill, load_skills
 from .system_prompt import ContextFile, BuildSystemPromptOptions, build_system_prompt, load_context_files
 from .tools import create_coding_tools
@@ -631,6 +631,7 @@ class AgentSession:
     async def _process_agent_event(self, event: AgentEvent) -> None:
         await self._emit_extension_event(event)
         self._persist_event_message(event)
+        self._persist_terminal_agent_end_message(event)
 
         if event.type == "agent_start":
             self._turn_index = 0
@@ -723,6 +724,34 @@ class AgentSession:
             display=bool(getattr(event.message, "display", True)),
             details=getattr(event.message, "details", None),
         )
+
+    def _persist_terminal_agent_end_message(self, event: AgentEvent) -> None:
+        if event.type != "agent_end" or not event.messages:
+            return
+
+        last_message = event.messages[-1]
+        if not isinstance(last_message, AssistantMessage):
+            return
+        if last_message.stop_reason not in (StopReason.ERROR, StopReason.ABORTED, "error", "aborted"):
+            return
+
+        last_entry = next(
+            (
+                entry
+                for entry in reversed(self.session_manager.get_entries())
+                if isinstance(entry, SessionMessageEntry)
+            ),
+            None,
+        )
+        if last_entry is not None:
+            persisted_message = last_entry.message
+            if (
+                persisted_message.get("role") == "assistant"
+                and message_timestamp(persisted_message) == message_timestamp(last_message)
+            ):
+                return
+
+        self.session_manager.append_message(last_message)
 
     async def _check_auto_compaction(self, assistant_message: AssistantMessage) -> None:
         if assistant_message.stop_reason in (StopReason.ABORTED, "aborted"):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from bampy.agent import AgentToolResult
@@ -9,6 +10,7 @@ from bampy.ai.stream import AssistantMessageEventStream
 from bampy.ai.types import (
     AssistantMessage,
     DoneEvent,
+    ErrorEvent,
     Model,
     StopReason,
     TextContent,
@@ -26,7 +28,7 @@ from bampy.app.extension import (
     ToolResultEventResult,
 )
 from bampy.app.runtime import AgentSession, create_agent_session
-from bampy.app.session import CompactionEntry, SessionManager, SessionMessageEntry
+from bampy.app.session import CompactionEntry, InMemoryBackend, SessionManager, SessionMessageEntry
 
 
 def create_model(
@@ -155,6 +157,80 @@ class TestAgentSession:
             "tool_result",
             "assistant",
         ]
+
+    async def test_runtime_persists_terminal_error_assistant_message(self):
+        backend = InMemoryBackend()
+        session = AgentSession(
+            cwd="/repo",
+            model=create_model(),
+            session_manager=SessionManager("/repo", backend=backend, persist=True),
+            stream_fn=lambda model, context, options: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        await session.prompt("hello")
+
+        entries = [
+            entry
+            for entry in session.session_manager.get_entries()
+            if isinstance(entry, SessionMessageEntry)
+        ]
+        assert [entry.message["role"] for entry in entries] == ["user", "assistant"]
+        assert entries[-1].message["stop_reason"] == StopReason.ERROR
+        assert entries[-1].message["error_message"] == "boom"
+
+        raw_entries = backend.read_all()
+        assert raw_entries[0]["type"] == "session"
+        assert [entry["type"] for entry in raw_entries[-2:]] == ["message", "message"]
+        assert raw_entries[-1]["message"]["stop_reason"] == StopReason.ERROR
+
+    async def test_runtime_persists_terminal_aborted_assistant_message(self):
+        backend = InMemoryBackend()
+
+        def stream_fn(model, context, options):
+            del context
+            stream = AssistantMessageEventStream()
+
+            async def runner():
+                while not options.cancellation.cancelled:
+                    await asyncio.sleep(0.01)
+                message = AssistantMessage(
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    content=[TextContent(text="partial result")],
+                    stop_reason=StopReason.ABORTED,
+                    error_message=options.cancellation.reason,
+                )
+                stream.push(ErrorEvent(reason=StopReason.ABORTED, error=message))
+
+            asyncio.create_task(runner())
+            return stream
+
+        session = AgentSession(
+            cwd="/repo",
+            model=create_model(),
+            session_manager=SessionManager("/repo", backend=backend, persist=True),
+            stream_fn=stream_fn,
+        )
+
+        prompt_task = asyncio.create_task(session.prompt("hello"))
+        await asyncio.sleep(0.03)
+        session.abort("user aborted")
+        await prompt_task
+
+        entries = [
+            entry
+            for entry in session.session_manager.get_entries()
+            if isinstance(entry, SessionMessageEntry)
+        ]
+        assert [entry.message["role"] for entry in entries] == ["user", "assistant"]
+        assert entries[-1].message["stop_reason"] == StopReason.ABORTED
+        assert entries[-1].message["error_message"] == "user aborted"
+
+        raw_entries = backend.read_all()
+        assert raw_entries[0]["type"] == "session"
+        assert [entry["type"] for entry in raw_entries[-2:]] == ["message", "message"]
+        assert raw_entries[-1]["message"]["stop_reason"] == StopReason.ABORTED
 
     async def test_create_agent_session_loads_extensions_skills_and_context_files(self, tmp_path: Path):
         (tmp_path / "CLAUDE.md").write_text("runtime guidance", encoding="utf-8")
