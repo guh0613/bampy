@@ -44,7 +44,7 @@ options = AnthropicOptions(
 )
 ```
 
-**API Key**：通过 `ANTHROPIC_API_KEY` 环境变量或 `stream_options.api_key` 设置。
+**API Key**：通过 `stream_options.api_key` 或上层 runtime 的 `get_api_key(provider)` 注入。
 
 ## OpenAI
 
@@ -76,7 +76,36 @@ options = OpenAIOptions(
 )
 ```
 
-**API Key**：通过 `OPENAI_API_KEY` 环境变量设置。
+**API Key**：通过 `stream_options.api_key` 或上层 runtime 的 `get_api_key(provider)` 注入。
+
+## DeepSeek
+
+DeepSeek 使用 OpenAI Chat Completions 兼容端点，安装 OpenAI provider 依赖即可：
+
+```bash
+uv add "bampy[openai]"
+```
+
+```python
+model = get_model("deepseek-v4-pro", provider="deepseek")
+```
+
+**内置模型**：
+
+| 模型 ID | 名称 | Thinking |
+| ------- | ---- | -------- |
+| `deepseek-v4-flash` | DeepSeek V4 Flash | 默认开启 |
+| `deepseek-v4-pro` | DeepSeek V4 Pro | 默认开启 |
+
+DeepSeek v4 的 thinking mode 通过 OpenAI SDK 的 `extra_body={"thinking": {"type": "enabled"}}` 启用。`SimpleStreamOptions(reasoning="low"|"medium"|"high")` 会映射为 DeepSeek 的 `reasoning_effort="high"`，`reasoning="xhigh"` 会映射为 `reasoning_effort="max"`。如需关闭 thinking，可使用：
+
+```python
+from bampy.ai import OpenAIOptions
+
+options = OpenAIOptions(reasoning_effort="none")
+```
+
+**API Key**：通过 `stream_options.api_key` 或上层 runtime 的 `get_api_key(provider)` 注入。
 
 ## Google Gemini
 
@@ -98,7 +127,7 @@ options = GeminiOptions(
 )
 ```
 
-**API Key**：通过 `GOOGLE_API_KEY` 环境变量设置。
+**API Key**：通过 `stream_options.api_key` 或上层 runtime 的 `get_api_key(provider)` 注入。
 
 ## 通用选项（SimpleStreamOptions）
 
@@ -117,13 +146,13 @@ options = SimpleStreamOptions(
 
 `reasoning` 映射规则：
 
-| ThinkingLevel | Anthropic | OpenAI | Gemini |
-| ------------- | --------- | ------ | ------ |
-| `minimal` | adaptive(low) | minimal | 低 budget |
-| `low` | adaptive(low) | low | 低 budget |
-| `medium` | adaptive(medium) | medium | 中 budget |
-| `high` | adaptive(high) | high | 高 budget |
-| `xhigh` | adaptive(max) | xhigh | 最大 budget |
+| ThinkingLevel | Anthropic | OpenAI | DeepSeek v4 | Gemini |
+| ------------- | --------- | ------ | ----------- | ------ |
+| `minimal` | adaptive(low) | minimal | high | 低 budget |
+| `low` | adaptive(low) | low | high | 低 budget |
+| `medium` | adaptive(medium) | medium | high | 中 budget |
+| `high` | adaptive(high) | high | high | 高 budget |
+| `xhigh` | adaptive(max) | xhigh | max | 最大 budget |
 
 ## 自定义模型
 
@@ -133,11 +162,11 @@ options = SimpleStreamOptions(
 from bampy.ai import register_model, Model, ModelCost
 
 register_model(Model(
-    id="deepseek-chat",
-    name="DeepSeek Chat",
+    id="my-chat-model",
+    name="My Chat Model",
     api="openai-completions",    # Chat Completions 兼容端点
-    provider="deepseek",
-    base_url="https://api.deepseek.com/v1",
+    provider="my-provider",
+    base_url="https://api.example.com/v1",
     context_window=64_000,
     max_tokens=8192,
     cost=ModelCost(input=0.14, output=0.28),

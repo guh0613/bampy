@@ -111,6 +111,37 @@ def _kimi_chat_model() -> Model:
     )
 
 
+def _deepseek_chat_model() -> Model:
+    return Model(
+        id="deepseek-v4-pro",
+        name="DeepSeek V4 Pro",
+        api="openai-completions",
+        provider="deepseek",
+        reasoning=True,
+        input_types=["text"],
+        base_url="https://api.deepseek.com/v1",
+        max_tokens=384000,
+        openai_chat_compat=OpenAIChatCompat(
+            max_tokens_field="max_tokens",
+            system_role="system",
+            replay_thinking_field="reasoning_content",
+            stream_reasoning_fields=["reasoning_content"],
+            supports_reasoning_effort=True,
+            supports_store=False,
+            reasoning_effort_map={
+                "minimal": "high",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "max",
+                "max": "max",
+            },
+            thinking_param="deepseek",
+            thinking_default_enabled=True,
+        ),
+    )
+
+
 def _responses_model(*, model_id: str = "gpt-5.4", reasoning: bool = True) -> Model:
     return Model(
         id=model_id,
@@ -367,9 +398,11 @@ class TestChatCompletionMessageConversion:
 
         reasoning_items = _convert_chat_completion_messages(_chat_model(reasoning=True), ctx)
         non_reasoning_items = _convert_chat_completion_messages(_chat_model(reasoning=False), ctx)
+        compat_items = _convert_chat_completion_messages(_deepseek_chat_model(), ctx)
 
         assert reasoning_items[0]["role"] == "developer"
         assert non_reasoning_items[0]["role"] == "system"
+        assert compat_items[0]["role"] == "system"
 
     def test_assistant_tool_calls_and_tool_results_are_converted(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
@@ -481,6 +514,25 @@ class TestChatCompletionMessageConversion:
         assert items[0]["content"] == "final answer"
         assert items[0]["reasoning"] == "deep thought"
 
+    def test_deepseek_reasoning_replay_uses_reasoning_content(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            content=[
+                ThinkingContent(thinking="deep thought"),
+                TextContent(text="final answer"),
+            ],
+        )
+        ctx = Context(messages=[assistant])
+        items = _convert_chat_completion_messages(_deepseek_chat_model(), ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "final answer"
+        assert items[0]["reasoning_content"] == "deep thought"
+
     def test_kimi_reasoning_replay_keeps_reasoning_details_raw(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
 
@@ -533,6 +585,10 @@ class TestOpenAIOptions:
         assert opts.temperature == 0.5
         assert opts.tool_choice == "required"
 
+    def test_accepts_deepseek_max_reasoning_effort(self):
+        opts = OpenAIOptions(reasoning_effort="max")
+        assert opts.reasoning_effort == "max"
+
     def test_client_sets_default_user_agent(self, monkeypatch):
         from bampy.ai.providers.openai import _create_openai_client
 
@@ -564,6 +620,15 @@ class TestReasoningEffortResolution:
 
         model = Model(id="o3", name="o3", api="openai-responses", provider="openai", reasoning=True)
         assert _resolve_reasoning_effort(model, ThinkingLevel.XHIGH) == "high"
+
+    def test_max_normalized_for_openai_models(self):
+        from bampy.ai.providers.openai import _normalize_reasoning_effort
+
+        supported = Model(id="gpt-5.4", name="GPT-5.4", api="openai-responses", provider="openai", reasoning=True)
+        unsupported = Model(id="o3", name="o3", api="openai-responses", provider="openai", reasoning=True)
+
+        assert _normalize_reasoning_effort(supported, "max") == "xhigh"
+        assert _normalize_reasoning_effort(unsupported, "max") == "high"
 
 
 class TestStreamEventHandling:
@@ -696,6 +761,74 @@ class TestChatCompletionStreaming:
                 ctx,
                 OpenAIOptions(api_key="test-key", tool_choice="required"),
             )
+
+    def test_build_chat_completion_params_for_deepseek_uses_thinking_mode(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        params = _build_chat_completion_params(
+            _deepseek_chat_model(),
+            Context(system_prompt="Be precise.", messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(
+                api_key="test-key",
+                max_tokens=321,
+                reasoning_effort="xhigh",
+                temperature=0.7,
+            ),
+        )
+
+        assert params["messages"][0]["role"] == "system"
+        assert params["max_tokens"] == 321
+        assert "max_completion_tokens" not in params
+        assert params["reasoning_effort"] == "max"
+        assert params["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert "temperature" not in params
+        assert "store" not in params
+
+    def test_build_chat_completion_params_for_deepseek_can_disable_thinking(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        params = _build_chat_completion_params(
+            _deepseek_chat_model(),
+            Context(messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="test-key", reasoning_effort="none", temperature=0.7),
+        )
+
+        assert params["extra_body"] == {"thinking": {"type": "disabled"}}
+        assert "reasoning_effort" not in params
+        assert params["temperature"] == 0.7
+        assert "store" not in params
+
+    def test_build_chat_completion_params_for_deepseek_accepts_native_max_effort(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        params = _build_chat_completion_params(
+            _deepseek_chat_model(),
+            Context(messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="test-key", reasoning_effort="max"),
+        )
+
+        assert params["reasoning_effort"] == "max"
+        assert params["extra_body"] == {"thinking": {"type": "enabled"}}
+
+    def test_parse_chat_completion_usage_handles_deepseek_cache_fields(self):
+        from bampy.ai.providers.openai import _parse_chat_completion_usage
+
+        usage = SimpleNamespace(
+            prompt_tokens=12,
+            prompt_cache_hit_tokens=5,
+            prompt_cache_miss_tokens=7,
+            completion_tokens=3,
+            total_tokens=15,
+        )
+
+        parsed = _parse_chat_completion_usage(usage)
+
+        assert parsed == {
+            "input": 7,
+            "output": 3,
+            "cache_read": 5,
+            "total_tokens": 15,
+        }
 
     @pytest.mark.asyncio
     async def test_stream_openai_completions_text_and_usage(self, monkeypatch):

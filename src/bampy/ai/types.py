@@ -169,13 +169,16 @@ class ThinkingLevel(StrEnum):
 
 class OpenAIChatCompat(BaseModel):
     max_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_completion_tokens"
+    system_role: Literal["system", "developer"] | None = None
     replay_thinking_field: (
         Literal["reasoning_content", "reasoning", "reasoning_text", "reasoning_details"]
         | None
     ) = None
     stream_reasoning_fields: list[str] = Field(default_factory=list)
     supports_reasoning_effort: bool = True
-    thinking_param: Literal["none", "kimi", "zai"] = "none"
+    supports_store: bool = True
+    reasoning_effort_map: dict[str, str] = Field(default_factory=dict)
+    thinking_param: Literal["none", "kimi", "zai", "deepseek"] = "none"
     thinking_default_enabled: bool = False
     thinking_tool_choice: list[Literal["auto", "none", "required"]] | None = None
 
@@ -247,7 +250,7 @@ class AnthropicOptions(StreamOptions):
 
 
 class OpenAIOptions(StreamOptions):
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None
     response_format: dict[str, Any] | None = None
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = None

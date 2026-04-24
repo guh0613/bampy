@@ -55,6 +55,15 @@ _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+_DEEPSEEK_V4_REASONING_EFFORT_MAP = {
+    "minimal": "high",
+    "low": "high",
+    "medium": "high",
+    "high": "high",
+    "xhigh": "max",
+    "max": "max",
+}
 
 
 BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
@@ -278,6 +287,7 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             provider="opencode-go",
             base_url=_OPENCODE_GO_BASE_URL,
             reasoning=True,
+            input_types=["text"],
             context_window=198_000,
             max_tokens=65_536,
             cost=_cost(input=0.95, output=4.0, cache_read=0.16),
@@ -287,6 +297,54 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
                 stream_reasoning_fields=["reasoning_content"],
                 supports_reasoning_effort=False,
                 thinking_param="zai",
+                thinking_default_enabled=True,
+            ),
+        ),
+    ),
+    "deepseek": (
+        _model(
+            id="deepseek-v4-flash",
+            name="DeepSeek V4 Flash",
+            api="openai-completions",
+            provider="deepseek",
+            base_url=_DEEPSEEK_BASE_URL,
+            reasoning=True,
+            input_types=["text"],
+            context_window=1_000_000,
+            max_tokens=384_000,
+            cost=_cost(input=0.14, output=0.28, cache_read=0.028),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                system_role="system",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=["reasoning_content"],
+                supports_reasoning_effort=True,
+                supports_store=False,
+                reasoning_effort_map=_DEEPSEEK_V4_REASONING_EFFORT_MAP,
+                thinking_param="deepseek",
+                thinking_default_enabled=True,
+            ),
+        ),
+        _model(
+            id="deepseek-v4-pro",
+            name="DeepSeek V4 Pro",
+            api="openai-completions",
+            provider="deepseek",
+            base_url=_DEEPSEEK_BASE_URL,
+            reasoning=True,
+            input_types=["text"],
+            context_window=1_000_000,
+            max_tokens=384_000,
+            cost=_cost(input=1.74, output=3.48, cache_read=0.145),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                system_role="system",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=["reasoning_content"],
+                supports_reasoning_effort=True,
+                supports_store=False,
+                reasoning_effort_map=_DEEPSEEK_V4_REASONING_EFFORT_MAP,
+                thinking_param="deepseek",
                 thinking_default_enabled=True,
             ),
         ),

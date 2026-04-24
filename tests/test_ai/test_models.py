@@ -46,11 +46,36 @@ class TestModelRegistry:
         assert model.base_url == "https://opencode.ai/zen/go/v1"
         assert model.openai_chat_compat is not None
         assert model.openai_chat_compat.replay_thinking_field == "reasoning"
-        assert model.openai_chat_compat.stream_reasoning_fields == [
-            "reasoning",
-            "reasoning_details",
-        ]
+        assert model.openai_chat_compat.stream_reasoning_fields == ["reasoning"]
         assert model.openai_chat_compat.max_tokens_field == "max_tokens"
+
+    def test_get_builtin_opencode_go_glm_model_is_text_only(self):
+        model = get_model("glm-5.1", provider="opencode-go")
+        assert model is not None
+        assert model.api == "openai-completions"
+        assert model.input_types == ["text"]
+
+    def test_get_builtin_deepseek_v4_models(self):
+        flash = get_model("deepseek-v4-flash", provider="deepseek")
+        pro = get_model("deepseek-v4-pro", provider="deepseek")
+
+        assert flash is not None
+        assert flash.api == "openai-completions"
+        assert flash.base_url == "https://api.deepseek.com/v1"
+        assert flash.reasoning is True
+        assert flash.context_window == 1_000_000
+        assert flash.max_tokens == 384_000
+        assert flash.input_types == ["text"]
+        assert flash.openai_chat_compat is not None
+        assert flash.openai_chat_compat.thinking_param == "deepseek"
+        assert flash.openai_chat_compat.replay_thinking_field == "reasoning_content"
+        assert flash.openai_chat_compat.supports_store is False
+        assert flash.openai_chat_compat.reasoning_effort_map["xhigh"] == "max"
+        assert flash.openai_chat_compat.reasoning_effort_map["max"] == "max"
+
+        assert pro is not None
+        assert pro.cost.input == 1.74
+        assert pro.cost.output == 3.48
 
     def test_updated_model_capabilities(self):
         gpt_54 = get_model("gpt-5.4", provider="openai")
@@ -82,6 +107,7 @@ class TestModelRegistry:
         assert "openai" in providers
         assert "google" in providers
         assert "ollama" in providers
+        assert "deepseek" in providers
 
     def test_register_custom_model(self):
         custom = Model(

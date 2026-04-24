@@ -72,9 +72,7 @@ def _resolve_reasoning_effort(
     """Map simple reasoning levels to the provider's effort values."""
     if reasoning is None:
         return None
-    if reasoning == ThinkingLevel.XHIGH and not supports_xhigh(model):
-        return "high"
-    return _EFFORT_MAP.get(reasoning, "medium")
+    return _normalize_reasoning_effort(model, _EFFORT_MAP.get(reasoning, "medium"))
 
 
 def _serialize_sdk_item(item: Any) -> str | None:
@@ -356,6 +354,22 @@ def _chat_replay_payloads(
     return payloads
 
 
+def _normalize_reasoning_effort(model: Model, effort: str | None) -> str | None:
+    """Normalize a public reasoning effort to the target backend's vocabulary."""
+    if effort is None or effort == "none":
+        return None
+
+    compat = model.openai_chat_compat
+    if compat and compat.reasoning_effort_map:
+        return compat.reasoning_effort_map.get(effort, effort)
+
+    if effort == "max":
+        return "xhigh" if supports_xhigh(model) else "high"
+    if effort == "xhigh" and not supports_xhigh(model):
+        return "high"
+    return effort
+
+
 def _chat_supports_reasoning_effort(model: Model) -> bool:
     """Whether the chat-completions backend accepts ``reasoning_effort``."""
     compat = model.openai_chat_compat
@@ -368,13 +382,21 @@ def _chat_max_tokens_field(model: Model) -> str:
     return compat.max_tokens_field if compat is not None else "max_completion_tokens"
 
 
+def _chat_system_role(model: Model) -> str:
+    """Return the system prompt role accepted by the chat-completions backend."""
+    compat = model.openai_chat_compat
+    if compat and compat.system_role:
+        return compat.system_role
+    return "developer" if model.reasoning else "system"
+
+
 def _chat_thinking_enabled(model: Model, options: OpenAIOptions | None) -> bool:
     """Whether provider-specific thinking mode should be enabled."""
     compat = model.openai_chat_compat
     if compat is None or compat.thinking_param == "none":
         return False
 
-    if compat.thinking_param in {"kimi", "zai"}:
+    if compat.thinking_param in {"kimi", "zai", "deepseek"}:
         if options and options.reasoning_effort == "none":
             return False
         if options and options.reasoning_effort is not None:
@@ -424,11 +446,17 @@ def _build_chat_completion_params(
         _chat_max_tokens_field(model): max_tokens,
     }
     extra_body: dict[str, Any] = {}
+    compat = model.openai_chat_compat
 
-    if options and options.temperature is not None:
+    thinking_enabled = _chat_thinking_enabled(model, options)
+    if options and options.temperature is not None and not (
+        thinking_enabled and compat and compat.thinking_param == "deepseek"
+    ):
         params["temperature"] = options.temperature
-    if model.reasoning and options and options.reasoning_effort and _chat_supports_reasoning_effort(model):
-        params["reasoning_effort"] = options.reasoning_effort
+    if model.reasoning and options and _chat_supports_reasoning_effort(model):
+        reasoning_effort = _normalize_reasoning_effort(model, options.reasoning_effort)
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
     if options and options.tool_choice is not None:
         params["tool_choice"] = options.tool_choice
     if options and options.response_format is not None:
@@ -443,16 +471,15 @@ def _build_chat_completion_params(
         params["service_tier"] = options.service_tier
     if options and options.verbosity:
         params["verbosity"] = options.verbosity
-    params["store"] = options.store if options and options.store is not None else False
+    if compat is None or compat.supports_store:
+        params["store"] = options.store if options and options.store is not None else False
 
     tools = _convert_chat_completion_tools(context.tools)
     if tools:
         params["tools"] = tools
 
-    thinking_enabled = _chat_thinking_enabled(model, options)
     _validate_chat_tool_choice(model, options, has_tools=bool(tools))
-    compat = model.openai_chat_compat
-    if compat and compat.thinking_param in {"kimi", "zai"}:
+    if compat and compat.thinking_param in {"kimi", "zai", "deepseek"}:
         extra_body["thinking"] = {
             "type": "enabled" if thinking_enabled else "disabled"
         }
@@ -672,8 +699,7 @@ def _convert_chat_completion_messages(
     messages: list[dict[str, Any]] = []
 
     if context.system_prompt:
-        role = "developer" if model.reasoning else "system"
-        messages.append({"role": role, "content": context.system_prompt})
+        messages.append({"role": _chat_system_role(model), "content": context.system_prompt})
 
     transformed = transform_messages(
         context.messages,
@@ -1230,14 +1256,21 @@ def _end_tool_call_block(
 def _parse_chat_completion_usage(usage: Any) -> dict[str, int]:
     """Normalize chat-completion usage payloads."""
     prompt_details = _option_value(usage, "prompt_tokens_details")
-    cached_tokens = _option_value(prompt_details, "cached_tokens") or 0
     prompt_tokens = _option_value(usage, "prompt_tokens") or 0
+    cache_hit_tokens = _option_value(usage, "prompt_cache_hit_tokens")
+    cache_miss_tokens = _option_value(usage, "prompt_cache_miss_tokens")
+    if cache_hit_tokens is not None or cache_miss_tokens is not None:
+        cached_tokens = cache_hit_tokens or 0
+        input_tokens = cache_miss_tokens if cache_miss_tokens is not None else max(prompt_tokens - cached_tokens, 0)
+    else:
+        cached_tokens = _option_value(prompt_details, "cached_tokens") or 0
+        input_tokens = max(prompt_tokens - cached_tokens, 0)
     completion_tokens = _option_value(usage, "completion_tokens") or 0
     total_tokens = _option_value(usage, "total_tokens") or (
-        max(prompt_tokens - cached_tokens, 0) + completion_tokens + cached_tokens
+        input_tokens + completion_tokens + cached_tokens
     )
     return {
-        "input": max(prompt_tokens - cached_tokens, 0),
+        "input": input_tokens,
         "output": completion_tokens,
         "cache_read": cached_tokens,
         "total_tokens": total_tokens,
@@ -1256,6 +1289,8 @@ def _map_chat_completion_finish_reason(
         return StopReason.TOOL_USE, None
     if finish_reason == "content_filter":
         return StopReason.ERROR, "Response was filtered by the provider"
+    if finish_reason == "insufficient_system_resource":
+        return StopReason.ERROR, "Provider stopped due to insufficient system resources"
     return StopReason.ERROR, f"Unhandled finish_reason: {finish_reason}"
 
 
