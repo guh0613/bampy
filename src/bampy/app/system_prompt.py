@@ -41,7 +41,8 @@ class BuildSystemPromptOptions:
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "read": "Read file contents",
     "bash": "Execute bash commands",
-    "edit": "Make surgical edits to files (find exact text and replace)",
+    "edit": "Make surgical edits to files with one or more exact text replacements",
+    "patch": "Apply a standard unified diff for larger or multi-file changes",
     "write": "Create or overwrite files",
     "grep": "Search file contents for patterns",
     "find": "Find files by glob pattern",
@@ -112,10 +113,6 @@ def build_system_prompt(options: BuildSystemPromptOptions | None = None) -> str:
     elif has_bash and (has_grep or has_find or has_ls):
         _add("Prefer grep/find/ls tools over bash for file exploration (faster)")
 
-    if has_read and has_edit:
-        _add("Use read to examine files before editing")
-    if has_edit:
-        _add("Use edit for precise changes (old text must match exactly)")
     if has_write:
         _add("Use write only for new files or complete rewrites")
     if has_edit or has_write:

@@ -47,7 +47,7 @@ class TestBuildSystemPrompt:
     def test_default_prompt_builds_visible_tools_and_guidelines(self):
         prompt = build_system_prompt(
             BuildSystemPromptOptions(
-                selected_tools=["read", "bash", "grep", "edit", "write", "custom"],
+                selected_tools=["read", "bash", "grep", "edit", "patch", "write", "custom"],
                 tool_snippets={"custom": "Custom helper"},
                 prompt_guidelines=["Keep diffs small", "Keep diffs small"],
                 cwd="C:\\repo\\project",
@@ -57,8 +57,6 @@ class TestBuildSystemPrompt:
         assert "- read: Read file contents" in prompt
         assert "- custom: Custom helper" in prompt
         assert "Prefer grep/find/ls tools over bash for file exploration (faster)" in prompt
-        assert "Use read to examine files before editing" in prompt
-        assert "Use edit for precise changes (old text must match exactly)" in prompt
         assert "Use write only for new files or complete rewrites" in prompt
         assert prompt.count("Keep diffs small") == 1
         assert "Current working directory: C:/repo/project" in prompt

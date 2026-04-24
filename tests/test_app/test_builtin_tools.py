@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from bampy.app import create_all_tools, create_coding_tools, create_read_only_tools
 from bampy.app.tools import (
@@ -13,6 +14,7 @@ from bampy.app.tools import (
     create_find_tool,
     create_grep_tool,
     create_ls_tool,
+    create_patch_tool,
     create_read_tool,
     create_write_tool,
 )
@@ -24,9 +26,9 @@ class TestToolPresets:
         read_only = create_read_only_tools("/repo")
         all_tools = create_all_tools("/repo")
 
-        assert [tool.name for tool in coding] == ["read", "bash", "edit", "write"]
+        assert [tool.name for tool in coding] == ["read", "bash", "edit", "patch", "write"]
         assert [tool.name for tool in read_only] == ["read", "grep", "find", "ls"]
-        assert list(all_tools) == ["read", "bash", "edit", "write", "grep", "find", "ls"]
+        assert list(all_tools) == ["read", "bash", "edit", "patch", "write", "grep", "find", "ls"]
 
 
 class TestReadTool:
@@ -72,13 +74,99 @@ class TestEditTool:
         tool = create_edit_tool(str(tmp_path))
         result = await tool.execute(
             "call-5",
-            {"path": "sample.txt", "old_text": "alpha\nbeta", "new_text": "alpha\nBETA"},
+            {
+                "path": "sample.txt",
+                "edits": [{"old_text": "alpha\nbeta", "new_text": "alpha\nBETA"}],
+            },
         )
 
-        assert "Successfully replaced text" in result.content[0].text
+        assert "Successfully replaced 1 block(s)" in result.content[0].text
         assert b"\r\n" in file_path.read_bytes()
         assert "BETA" in file_path.read_text(encoding="utf-8")
         assert "sample.txt" in result.details["diff"]
+
+    async def test_edit_tool_applies_multiple_disjoint_edits(self, tmp_path: Path):
+        file_path = tmp_path / "sample.txt"
+        file_path.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
+
+        tool = create_edit_tool(str(tmp_path))
+        await tool.execute(
+            "call-5b",
+            {
+                "path": "sample.txt",
+                "edits": [
+                    {"old_text": "alpha\n", "new_text": "ALPHA\n"},
+                    {"old_text": "gamma\n", "new_text": "GAMMA\n"},
+                ],
+            },
+        )
+
+        assert file_path.read_text(encoding="utf-8") == "ALPHA\nbeta\nGAMMA\ndelta\n"
+
+    async def test_edit_tool_rejects_legacy_single_replacement_shape(self, tmp_path: Path):
+        tool = create_edit_tool(str(tmp_path))
+
+        with pytest.raises(ValidationError):
+            await tool.execute(
+                "call-5c",
+                {"path": "legacy.txt", "old_text": "before", "new_text": "after"},
+            )
+
+    async def test_edit_tool_fuzzy_matches_trailing_whitespace(self, tmp_path: Path):
+        file_path = tmp_path / "fuzzy.txt"
+        file_path.write_text("line one   \nline two  \nline three\n", encoding="utf-8")
+
+        tool = create_edit_tool(str(tmp_path))
+        await tool.execute(
+            "call-5d",
+            {
+                "path": "fuzzy.txt",
+                "edits": [{"old_text": "line one\nline two\n", "new_text": "replaced\n"}],
+            },
+        )
+
+        assert file_path.read_text(encoding="utf-8") == "replaced\nline three\n"
+
+
+class TestPatchTool:
+    async def test_patch_tool_applies_unified_diff(self, tmp_path: Path):
+        file_path = tmp_path / "sample.txt"
+        file_path.write_text("alpha\nbeta\n", encoding="utf-8")
+
+        tool = create_patch_tool(str(tmp_path))
+        result = await tool.execute(
+            "call-patch-1",
+            {
+                "patch": (
+                    "--- a/sample.txt\n"
+                    "+++ b/sample.txt\n"
+                    "@@ -1,2 +1,2 @@\n"
+                    " alpha\n"
+                    "-beta\n"
+                    "+BETA\n"
+                )
+            },
+        )
+
+        assert "Successfully applied patch" in result.content[0].text
+        assert file_path.read_text(encoding="utf-8") == "alpha\nBETA\n"
+
+    async def test_patch_tool_rejects_paths_that_escape_cwd(self, tmp_path: Path):
+        tool = create_patch_tool(str(tmp_path))
+
+        with pytest.raises(ValueError, match="escapes workspace"):
+            await tool.execute(
+                "call-patch-2",
+                {
+                    "patch": (
+                        "--- a/../outside.txt\n"
+                        "+++ b/../outside.txt\n"
+                        "@@ -1 +1 @@\n"
+                        "-old\n"
+                        "+new\n"
+                    )
+                },
+            )
 
 
 class TestLsTool:

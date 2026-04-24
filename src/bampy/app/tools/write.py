@@ -13,6 +13,7 @@ from bampy.agent.cancellation import CancellationToken
 from bampy.agent.types import AgentToolResult
 from bampy.ai.types import TextContent
 
+from .file_mutation_queue import with_file_mutation_queue
 from .path_utils import resolve_to_cwd
 
 
@@ -56,18 +57,22 @@ class WriteTool:
             cancellation.raise_if_cancelled()
 
         resolved_path = resolve_to_cwd(arguments.path, self._cwd)
-        path = Path(resolved_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if cancellation is not None:
-            cancellation.raise_if_cancelled()
-        path.write_text(arguments.content, encoding="utf-8")
-        return AgentToolResult(
-            content=[
-                TextContent(
-                    text=f"Successfully wrote {len(arguments.content.encode('utf-8'))} bytes to {arguments.path}"
-                )
-            ]
-        )
+
+        async def _run() -> AgentToolResult:
+            path = Path(resolved_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
+            path.write_text(arguments.content, encoding="utf-8")
+            return AgentToolResult(
+                content=[
+                    TextContent(
+                        text=f"Successfully wrote {len(arguments.content.encode('utf-8'))} bytes to {arguments.path}"
+                    )
+                ]
+            )
+
+        return await with_file_mutation_queue(resolved_path, _run)
 
 
 def create_write_tool(cwd: str) -> WriteTool:
