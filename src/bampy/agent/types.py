@@ -67,6 +67,7 @@ class AgentThinkingLevel(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
 
     def to_ai_reasoning(self) -> ThinkingLevel | None:
         if self is AgentThinkingLevel.OFF:

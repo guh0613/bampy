@@ -11,7 +11,7 @@ uv add "bampy[anthropic]"
 ```python
 from bampy.ai import get_model
 
-model = get_model("anthropic", "claude-sonnet-4-20250514")
+model = get_model("claude-opus-4-7", provider="anthropic")
 ```
 
 **内置模型**：
@@ -25,20 +25,21 @@ model = get_model("anthropic", "claude-sonnet-4-20250514")
 | `claude-opus-4-1-20250527` | Claude Opus 4.1 |
 | `claude-opus-4-5-20250605` | Claude Opus 4.5 |
 | `claude-opus-4-6-20250624` | Claude Opus 4.6 |
+| `claude-opus-4-7` | Claude Opus 4.7 |
 
 **特有选项**：
 
 ```python
 from bampy.ai import AnthropicOptions, AnthropicThinkingEnabled, AnthropicThinkingAdaptive
 
-# 显式 thinking budget
+# 显式 thinking budget（Opus 4.7 不支持；4.6 上已不推荐）
 options = AnthropicOptions(
     thinking=AnthropicThinkingEnabled(budget_tokens=16384),
 )
 
-# 自适应 thinking（推荐）
+# 自适应 thinking（Opus 4.7/4.6 和 Sonnet 4.6 推荐）
 options = AnthropicOptions(
-    thinking=AnthropicThinkingAdaptive(effort="high"),
+    thinking=AnthropicThinkingAdaptive(effort="xhigh", display="summarized"),
     interleaved_thinking=True,
     cache_retention="long",
 )
@@ -72,7 +73,7 @@ model = get_model("openai", "gpt-4o")
 from bampy.ai import OpenAIOptions
 
 options = OpenAIOptions(
-    reasoning_effort="high",  # minimal/low/medium/high/xhigh
+    reasoning_effort="high",  # minimal/low/medium/high/xhigh/max
 )
 ```
 
@@ -152,7 +153,8 @@ options = SimpleStreamOptions(
 | `low` | adaptive(low) | low | high | 低 budget |
 | `medium` | adaptive(medium) | medium | high | 中 budget |
 | `high` | adaptive(high) | high | high | 高 budget |
-| `xhigh` | adaptive(max) | xhigh | max | 最大 budget |
+| `xhigh` | adaptive(xhigh) on Opus 4.7; adaptive(max) on 4.6 | xhigh | max | 最大 budget |
+| `max` | adaptive(max) | max（OpenAI 模型会按支持情况归一化） | max | 最大 budget |
 
 ## 自定义模型
 

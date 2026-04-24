@@ -55,6 +55,7 @@ _EFFORT_MAP: dict[ThinkingLevel, str] = {
     ThinkingLevel.MEDIUM: "medium",
     ThinkingLevel.HIGH: "high",
     ThinkingLevel.XHIGH: "xhigh",
+    ThinkingLevel.MAX: "max",
 }
 
 _CHAT_REASONING_FIELDS = (

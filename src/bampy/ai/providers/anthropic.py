@@ -58,6 +58,7 @@ _THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.MEDIUM: 8192,
     ThinkingLevel.HIGH: 16384,
     ThinkingLevel.XHIGH: 16384,
+    ThinkingLevel.MAX: 16384,
 }
 
 _INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
@@ -68,14 +69,25 @@ _EFFORT_MAP: dict[ThinkingLevel, str] = {
     ThinkingLevel.LOW: "low",
     ThinkingLevel.MEDIUM: "medium",
     ThinkingLevel.HIGH: "high",
-    ThinkingLevel.XHIGH: "high",
+    ThinkingLevel.XHIGH: "xhigh",
+    ThinkingLevel.MAX: "max",
 }
 
 
+def _is_mythos_preview(model_id: str) -> bool:
+    return "claude-mythos-preview" in model_id
+
+
+def _is_opus_47(model_id: str) -> bool:
+    return "claude-opus-4-7" in model_id or "claude-opus-4.7" in model_id
+
+
 def _supports_adaptive_thinking(model_id: str) -> bool:
-    """Adaptive thinking is currently documented for Claude Opus/Sonnet 4.6."""
+    """Adaptive thinking is documented for Mythos Preview, Opus 4.7, and Opus/Sonnet 4.6."""
     return (
-        "claude-opus-4-6" in model_id
+        _is_mythos_preview(model_id)
+        or _is_opus_47(model_id)
+        or "claude-opus-4-6" in model_id
         or "claude-opus-4.6" in model_id
         or "claude-sonnet-4-6" in model_id
         or "claude-sonnet-4.6" in model_id
@@ -83,13 +95,38 @@ def _supports_adaptive_thinking(model_id: str) -> bool:
 
 
 def _supports_effort(model_id: str) -> bool:
-    """Effort is documented for Claude Opus 4.5 and the adaptive 4.6 models."""
+    """Effort is documented for Mythos Preview, Opus 4.7/4.6/4.5, and Sonnet 4.6."""
     return _supports_adaptive_thinking(model_id) or "claude-opus-4-5" in model_id or "claude-opus-4.5" in model_id
 
 
+def _supports_xhigh_effort(model_id: str) -> bool:
+    """The `xhigh` effort level is currently documented for Claude Opus 4.7 only."""
+    return _is_opus_47(model_id)
+
+
 def _supports_max_effort(model_id: str) -> bool:
-    """The `max` effort level is currently documented for Claude Opus 4.6 only."""
-    return "claude-opus-4-6" in model_id or "claude-opus-4.6" in model_id
+    """The `max` effort level is documented for Mythos Preview, Opus 4.7/4.6, and Sonnet 4.6."""
+    return (
+        _is_mythos_preview(model_id)
+        or _is_opus_47(model_id)
+        or "claude-opus-4-6" in model_id
+        or "claude-opus-4.6" in model_id
+        or "claude-sonnet-4-6" in model_id
+        or "claude-sonnet-4.6" in model_id
+    )
+
+
+def _supports_manual_thinking(model_id: str) -> bool:
+    """Opus 4.7 rejects manual thinking budgets; use adaptive thinking instead."""
+    return not _is_opus_47(model_id)
+
+
+def _normalize_effort(model: Model, effort: str | None) -> str | None:
+    if effort == "xhigh" and not _supports_xhigh_effort(model.id):
+        return "max" if _supports_max_effort(model.id) else "high"
+    if effort == "max" and not _supports_max_effort(model.id):
+        return "high"
+    return effort
 
 
 def _resolve_effort(
@@ -99,14 +136,10 @@ def _resolve_effort(
 ) -> str | None:
     """Resolve an Anthropic effort level from explicit or simple options."""
     if effort is not None:
-        if effort == "max" and not _supports_max_effort(model.id):
-            return "high"
-        return effort
+        return _normalize_effort(model, effort)
     if reasoning is None:
         return None
-    if reasoning == ThinkingLevel.XHIGH:
-        return "max" if _supports_max_effort(model.id) else "high"
-    return _EFFORT_MAP.get(reasoning, "medium")
+    return _normalize_effort(model, _EFFORT_MAP.get(reasoning, "medium"))
 
 
 def _adjust_budget_tokens(
@@ -150,6 +183,9 @@ def _resolve_thinking(
             output_config = {"effort": resolved_effort} if resolved_effort is not None else None
             return thinking, output_config
 
+        if not _supports_manual_thinking(model.id):
+            raise ValueError(f"{model.id} only supports adaptive thinking; manual budget_tokens are rejected")
+
         thinking = {
             "type": "enabled",
             "budget_tokens": thinking_config.budget_tokens,
@@ -171,6 +207,9 @@ def _resolve_thinking(
         thinking = {"type": "adaptive"}
         output_config = {"effort": resolved_effort} if resolved_effort is not None else None
         return thinking, output_config
+
+    if not _supports_manual_thinking(model.id):
+        raise ValueError(f"{model.id} only supports adaptive thinking; manual budget_tokens are rejected")
 
     budget = _THINKING_BUDGETS.get(reasoning, 8192)
     thinking = {"type": "enabled", "budget_tokens": budget}
@@ -498,7 +537,7 @@ def stream_simple_anthropic(
             thinking, output_config = _resolve_thinking(model, options.reasoning, None)
             if thinking:
                 if thinking["type"] == "adaptive":
-                    thinking_config = AnthropicThinkingAdaptive()
+                    thinking_config = AnthropicThinkingAdaptive(display="summarized")
                 else:
                     base_max_tokens = options.max_tokens or model.max_tokens
                     adjusted_max_tokens, adjusted_budget = _adjust_max_tokens_for_thinking(

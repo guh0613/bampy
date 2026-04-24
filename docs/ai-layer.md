@@ -76,7 +76,8 @@ ThinkingLevel.MINIMAL  # 最少推理
 ThinkingLevel.LOW
 ThinkingLevel.MEDIUM
 ThinkingLevel.HIGH
-ThinkingLevel.XHIGH    # 最深度推理
+ThinkingLevel.XHIGH
+ThinkingLevel.MAX      # 最大推理
 ```
 
 ### 用量与费用

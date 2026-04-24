@@ -120,6 +120,10 @@ class TestStreamOptions:
         opts = SimpleStreamOptions(reasoning=ThinkingLevel.HIGH, temperature=0.5)
         assert opts.reasoning == ThinkingLevel.HIGH
 
+    def test_simple_stream_options_accepts_max_reasoning(self):
+        opts = SimpleStreamOptions(reasoning=ThinkingLevel.MAX)
+        assert opts.reasoning == ThinkingLevel.MAX
+
 
 class TestEvents:
     def test_start_event(self):

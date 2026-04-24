@@ -57,7 +57,7 @@ await session.start()
 | ---- | ---- | ------ | ---- |
 | `cwd` | `str \| None` | 当前目录 | 工作目录 |
 | `model` | `Model \| None` | 自动选择 | LLM 模型 |
-| `thinking_level` | `str \| None` | `"off"` | 推理等级：off/minimal/low/medium/high/xhigh |
+| `thinking_level` | `str \| None` | `"off"` | 推理等级：off/minimal/low/medium/high/xhigh/max |
 | `steering_mode` | `str` | `"one-at-a-time"` | steering 队列模式：`one-at-a-time` 或 `all` |
 | `follow_up_mode` | `str` | `"one-at-a-time"` | follow-up 队列模式：`one-at-a-time` 或 `all` |
 | `tools` | `list \| dict \| None` | coding_tools | 工具集，None 使用默认编码工具 |

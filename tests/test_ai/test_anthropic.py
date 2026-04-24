@@ -264,13 +264,36 @@ class TestThinkingResolution:
         assert thinking == {"type": "adaptive"}
         assert output_config == {"effort": "high"}
 
-    def test_xhigh_maps_to_max_for_opus_46(self):
+    def test_xhigh_maps_to_native_xhigh_for_opus_47(self):
+        from bampy.ai.providers.anthropic import _resolve_thinking
+
+        model = Model(id="claude-opus-4-7", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.XHIGH, None)
+        assert thinking == {"type": "adaptive"}
+        assert output_config == {"effort": "xhigh"}
+
+    def test_xhigh_maps_to_max_for_opus_46_compat(self):
         from bampy.ai.providers.anthropic import _resolve_thinking
 
         model = Model(id="claude-opus-4-6", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
         thinking, output_config = _resolve_thinking(model, ThinkingLevel.XHIGH, None)
         assert thinking == {"type": "adaptive"}
         assert output_config == {"effort": "max"}
+
+    def test_max_maps_to_max_for_sonnet_46(self):
+        from bampy.ai.providers.anthropic import _resolve_thinking
+
+        model = Model(id="claude-sonnet-4-6", name="Sonnet", api="anthropic-messages", provider="anthropic", reasoning=True)
+        thinking, output_config = _resolve_thinking(model, ThinkingLevel.MAX, None)
+        assert thinking == {"type": "adaptive"}
+        assert output_config == {"effort": "max"}
+
+    def test_manual_thinking_rejected_for_opus_47(self):
+        from bampy.ai.providers.anthropic import _resolve_thinking
+
+        model = Model(id="claude-opus-4-7", name="Opus", api="anthropic-messages", provider="anthropic", reasoning=True)
+        with pytest.raises(ValueError, match="only supports adaptive thinking"):
+            _resolve_thinking(model, None, AnthropicThinkingEnabled(budget_tokens=4096))
 
     def test_budget_for_haiku(self):
         from bampy.ai.providers.anthropic import _resolve_thinking
@@ -315,12 +338,17 @@ class TestAnthropicOptions:
 
     def test_with_thinking(self):
         opts = AnthropicOptions(
-            thinking=AnthropicThinkingAdaptive(effort="max", display="omitted"),
+            thinking=AnthropicThinkingAdaptive(effort="xhigh", display="omitted"),
             interleaved_thinking=True,
         )
-        assert opts.thinking.effort == "max"
+        assert opts.thinking.effort == "xhigh"
         assert opts.thinking.display == "omitted"
         assert opts.interleaved_thinking is True
+
+    def test_accepts_max_effort(self):
+        opts = AnthropicOptions(effort="max", thinking=AnthropicThinkingAdaptive(effort="max"))
+        assert opts.effort == "max"
+        assert opts.thinking.effort == "max"
 
 
 # ---------------------------------------------------------------------------

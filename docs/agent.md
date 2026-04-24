@@ -76,7 +76,7 @@ state.error              # str | None
 # 修改
 agent.set_system_prompt("...")
 agent.set_model(model)
-agent.set_thinking_level("high")  # off/minimal/low/medium/high/xhigh
+agent.set_thinking_level("high")  # off/minimal/low/medium/high/xhigh/max
 agent.set_tools([tool1, tool2])
 agent.set_max_turns(20)
 agent.append_message(msg)

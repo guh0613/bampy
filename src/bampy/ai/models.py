@@ -92,7 +92,7 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
         _model(
             id="claude-opus-4-1",
-            name="Claude Opus 4.1 (latest)",
+            name="Claude Opus 4.1",
             api="anthropic-messages",
             provider="anthropic",
             base_url=_ANTHROPIC_BASE_URL,
@@ -103,13 +103,24 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
         _model(
             id="claude-opus-4-5",
-            name="Claude Opus 4.5 (latest)",
+            name="Claude Opus 4.5",
             api="anthropic-messages",
             provider="anthropic",
             base_url=_ANTHROPIC_BASE_URL,
             reasoning=True,
             context_window=200_000,
             max_tokens=64_000,
+            cost=_cost(input=5.0, output=25.0, cache_read=0.5, cache_write=6.25),
+        ),
+        _model(
+            id="claude-opus-4-7",
+            name="Claude Opus 4.7 (latest)",
+            api="anthropic-messages",
+            provider="anthropic",
+            base_url=_ANTHROPIC_BASE_URL,
+            reasoning=True,
+            context_window=1_000_000,
+            max_tokens=128_000,
             cost=_cost(input=5.0, output=25.0, cache_read=0.5, cache_write=6.25),
         ),
         _model(
@@ -687,8 +698,8 @@ def supports_xhigh(model: Model | None) -> bool:
             "gpt-5.2",
             "gpt-5.3",
             "gpt-5.4",
-            "claude-opus-4-6",
-            "claude-opus-4.6",
+            "claude-opus-4-7",
+            "claude-opus-4.7",
         )
     )
 

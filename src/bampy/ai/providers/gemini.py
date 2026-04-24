@@ -49,6 +49,7 @@ _THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.MEDIUM: 8192,
     ThinkingLevel.HIGH: 16384,
     ThinkingLevel.XHIGH: 16384,
+    ThinkingLevel.MAX: 16384,
 }
 _SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 

@@ -81,6 +81,7 @@ class TestModelRegistry:
         gpt_54 = get_model("gpt-5.4", provider="openai")
         haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")
         gpt_52 = get_model("gpt-5.2", provider="openai")
+        opus_47 = get_model("claude-opus-4-7", provider="anthropic")
 
         assert gpt_54 is not None
         assert gpt_54.context_window == 272_000
@@ -88,6 +89,11 @@ class TestModelRegistry:
         assert haiku.reasoning is True
         assert gpt_52 is not None
         assert gpt_52.max_tokens == 128_000
+        assert opus_47 is not None
+        assert opus_47.context_window == 1_000_000
+        assert opus_47.max_tokens == 128_000
+        assert opus_47.cost.input == 5.0
+        assert opus_47.cost.output == 25.0
 
     def test_get_model_not_found(self):
         model = get_model("nonexistent-model")
@@ -165,6 +171,8 @@ class TestCostCalculation:
 class TestModelHelpers:
     def test_supports_xhigh(self):
         model = get_model("gpt-5.4", provider="openai")
+        assert supports_xhigh(model) is True
+        model = get_model("claude-opus-4-7", provider="anthropic")
         assert supports_xhigh(model) is True
 
     def test_models_are_equal(self):

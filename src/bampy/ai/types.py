@@ -165,6 +165,7 @@ class ThinkingLevel(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
 
 
 class OpenAIChatCompat(BaseModel):
@@ -235,7 +236,7 @@ class AnthropicThinkingEnabled(BaseModel):
 
 class AnthropicThinkingAdaptive(BaseModel):
     type: Literal["adaptive"] = "adaptive"
-    effort: Literal["low", "medium", "high", "max"] = "medium"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     display: Literal["summarized", "omitted"] | None = None
 
 
@@ -244,7 +245,7 @@ AnthropicThinkingConfig = AnthropicThinkingEnabled | AnthropicThinkingAdaptive
 
 class AnthropicOptions(StreamOptions):
     thinking: AnthropicThinkingConfig | None = None
-    effort: Literal["low", "medium", "high", "max"] | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     interleaved_thinking: bool | None = None
     cache_retention: Literal["short", "long"] | None = None
 
