@@ -34,7 +34,7 @@ if _ENV_FILE.exists():
 
 _API_KEY = os.environ.get("GEMINI_API_KEY", "")
 _BASE_URL = os.environ.get("GEMINI_BASE_URL", "")
-_TEST_MODEL = "gemini-3.1-flash-lite-preview"
+_TEST_MODEL = "gemini-3.1-flash-lite"
 
 live = pytest.mark.live
 requires_live_api = pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY not set")

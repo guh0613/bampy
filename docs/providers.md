@@ -54,18 +54,23 @@ uv add "bampy[openai]"
 ```
 
 ```python
-model = get_model("openai", "gpt-4o")
+model = get_model("gpt-5.5", provider="openai")
 ```
 
-**内置模型**：
+**推荐内置模型**：
 
 | 模型 ID | 名称 |
 | ------- | ---- |
-| `gpt-4o` | GPT-4o |
+| `gpt-5.5` | GPT-5.5 |
+| `gpt-5.5-pro` | GPT-5.5 Pro |
+| `gpt-5.4` | GPT-5.4 |
+| `gpt-5.4-pro` | GPT-5.4 Pro |
+| `gpt-5.4-mini` | GPT-5.4 Mini |
+| `gpt-5.4-nano` | GPT-5.4 Nano |
+| `gpt-5.3-codex` | GPT-5.3 Codex |
+| `chat-latest` | Chat Latest |
 | `gpt-4.1` | GPT-4.1 |
 | `gpt-4.1-mini` | GPT-4.1 Mini |
-| `o1` | o1 |
-| `o1-mini` | o1-mini |
 
 **特有选项**：
 
@@ -115,8 +120,21 @@ uv add "bampy[google]"
 ```
 
 ```python
-model = get_model("google", "gemini-2.5-flash")
+model = get_model("gemini-3.1-flash-lite", provider="google")
 ```
+
+**推荐内置模型**：
+
+| 模型 ID | 名称 |
+| ------- | ---- |
+| `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview |
+| `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools |
+| `gemini-3-flash-preview` | Gemini 3 Flash Preview |
+| `gemini-3.1-flash-lite` | Gemini 3.1 Flash-Lite |
+| `gemini-3.1-flash-lite-preview` | Gemini 3.1 Flash-Lite Preview |
+| `gemini-2.5-pro` | Gemini 2.5 Pro |
+| `gemini-2.5-flash` | Gemini 2.5 Flash |
+| `gemini-2.5-flash-lite` | Gemini 2.5 Flash-Lite |
 
 **特有选项**：
 
@@ -127,6 +145,8 @@ options = GeminiOptions(
     thinking_budget=8192,
 )
 ```
+
+Gemini 3 系列推荐使用 `thinking_level="minimal"|"low"|"medium"|"high"`；`SimpleStreamOptions(reasoning=...)` 会自动映射为 Gemini 3 的 `thinking_level`，Gemini 2.5 则继续映射为 `thinking_budget`。
 
 **API Key**：通过 `stream_options.api_key` 或上层 runtime 的 `get_api_key(provider)` 注入。
 

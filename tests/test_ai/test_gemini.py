@@ -47,7 +47,7 @@ _API_KEY = os.environ.get("GEMINI_API_KEY", "")
 _BASE_URL = os.environ.get("GEMINI_BASE_URL", "")
 
 # Default model for live tests
-_TEST_MODEL = "gemini-3.1-flash-lite-preview"
+_TEST_MODEL = "gemini-3.1-flash-lite"
 
 live = pytest.mark.live
 requires_live_api = pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY not set")
@@ -65,7 +65,7 @@ def _opts(**kw) -> GeminiOptions:
     return GeminiOptions(api_key=_API_KEY, **kw)
 
 
-def _unit_model(*, model_id: str = "gemini-3.1-flash-lite-preview", reasoning: bool = True) -> Model:
+def _unit_model(*, model_id: str = "gemini-3.1-flash-lite", reasoning: bool = True) -> Model:
     return Model(
         id=model_id,
         name=model_id,
@@ -154,7 +154,7 @@ class TestMessageConversion:
     def test_cross_model_thinking_downgraded_to_text(self):
         from bampy.ai.providers.gemini import _convert_messages
 
-        model = _unit_model(model_id="gemini-3.1-flash-lite-preview")
+        model = _unit_model(model_id="gemini-3.1-flash-lite")
         ctx = Context(messages=[
             AssistantMessage(
                 api="google-generative-ai",
@@ -338,12 +338,58 @@ class TestGeminiOptions:
     def test_default(self):
         opts = GeminiOptions()
         assert opts.thinking_budget is None
+        assert opts.thinking_level is None
         assert opts.temperature is None
 
     def test_with_budget(self):
         opts = GeminiOptions(thinking_budget=4096, temperature=0.5)
         assert opts.thinking_budget == 4096
         assert opts.temperature == 0.5
+
+    def test_with_thinking_level(self):
+        opts = GeminiOptions(thinking_level="low")
+        assert opts.thinking_level == "low"
+
+
+class TestThinkingMapping:
+    def test_gemini3_flash_maps_simple_reasoning_to_thinking_level(self):
+        from bampy.ai.providers.gemini import _reasoning_to_gemini3_thinking_level
+
+        assert _reasoning_to_gemini3_thinking_level(
+            "gemini-3-flash-preview",
+            ThinkingLevel.MINIMAL,
+        ) == "minimal"
+        assert _reasoning_to_gemini3_thinking_level(
+            "gemini-3-flash-preview",
+            ThinkingLevel.MEDIUM,
+        ) == "medium"
+        assert _reasoning_to_gemini3_thinking_level(
+            "gemini-3-flash-preview",
+            ThinkingLevel.XHIGH,
+        ) == "high"
+
+    def test_gemini3_pro_clamps_to_supported_thinking_levels(self):
+        from bampy.ai.providers.gemini import (
+            _normalize_gemini3_thinking_level,
+            _reasoning_to_gemini3_thinking_level,
+        )
+
+        assert _reasoning_to_gemini3_thinking_level(
+            "gemini-3.1-pro-preview",
+            ThinkingLevel.MINIMAL,
+        ) == "low"
+        assert _reasoning_to_gemini3_thinking_level(
+            "gemini-3.1-pro-preview",
+            ThinkingLevel.MEDIUM,
+        ) == "high"
+        assert _normalize_gemini3_thinking_level(
+            "gemini-3.1-pro-preview",
+            "minimal",
+        ) == "low"
+        assert _normalize_gemini3_thinking_level(
+            "gemini-3.1-pro-preview",
+            "medium",
+        ) == "high"
 
 
 # ---------------------------------------------------------------------------

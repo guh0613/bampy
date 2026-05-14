@@ -78,17 +78,29 @@ class TestModelRegistry:
         assert pro.cost.output == 3.48
 
     def test_updated_model_capabilities(self):
+        gpt_55 = get_model("gpt-5.5", provider="openai")
         gpt_54 = get_model("gpt-5.4", provider="openai")
+        gpt_54_mini = get_model("gpt-5.4-mini", provider="openai")
+        gemini_31_lite = get_model("gemini-3.1-flash-lite", provider="google")
         haiku = get_model("claude-haiku-4-5-20251001", provider="anthropic")
-        gpt_52 = get_model("gpt-5.2", provider="openai")
         opus_47 = get_model("claude-opus-4-7", provider="anthropic")
 
+        assert gpt_55 is not None
+        assert gpt_55.context_window == 1_050_000
+        assert gpt_55.max_tokens == 128_000
+        assert gpt_55.cost.input == 5.0
+        assert gpt_55.cost.output == 30.0
         assert gpt_54 is not None
-        assert gpt_54.context_window == 272_000
+        assert gpt_54.context_window == 1_050_000
+        assert gpt_54_mini is not None
+        assert gpt_54_mini.context_window == 400_000
+        assert gemini_31_lite is not None
+        assert gemini_31_lite.context_window == 1_048_576
+        assert gemini_31_lite.max_tokens == 65_536
+        assert gemini_31_lite.cost.cache_read == 0.025
+        assert get_model("gemini-3-pro-preview", provider="google") is None
         assert haiku is not None
         assert haiku.reasoning is True
-        assert gpt_52 is not None
-        assert gpt_52.max_tokens == 128_000
         assert opus_47 is not None
         assert opus_47.context_window == 1_000_000
         assert opus_47.max_tokens == 128_000
@@ -170,7 +182,7 @@ class TestCostCalculation:
 
 class TestModelHelpers:
     def test_supports_xhigh(self):
-        model = get_model("gpt-5.4", provider="openai")
+        model = get_model("gpt-5.5", provider="openai")
         assert supports_xhigh(model) is True
         model = get_model("claude-opus-4-7", provider="anthropic")
         assert supports_xhigh(model) is True

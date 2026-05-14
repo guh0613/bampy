@@ -76,10 +76,10 @@ from .tools import create_coding_tools
 
 
 def _default_model() -> Model:
-    model = get_model("gemini-2.5-flash-lite", "google")
+    model = get_model("gemini-3.1-flash-lite", provider="google")
     if model is not None:
         return model
-    model = get_model("gpt-4.1-mini", "openai")
+    model = get_model("gpt-5.4-mini", provider="openai")
     if model is not None:
         return model
     raise RuntimeError("No built-in fallback model is available")

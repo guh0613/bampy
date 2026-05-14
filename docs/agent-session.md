@@ -185,7 +185,7 @@ session.active_tool_names  # 激活的工具名
 session.cwd                # 工作目录
 
 # 修改
-session.set_model(get_model("openai", "gpt-4o"))
+session.set_model(get_model("gpt-5.5", provider="openai"))
 session.set_thinking_level("high")
 session.set_steering_mode("all")
 session.set_follow_up_mode("one-at-a-time")

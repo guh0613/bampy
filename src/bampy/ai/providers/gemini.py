@@ -51,6 +51,28 @@ _THINKING_BUDGETS: dict[ThinkingLevel, int] = {
     ThinkingLevel.XHIGH: 16384,
     ThinkingLevel.MAX: 16384,
 }
+_GEMINI25_THINKING_LEVEL_BUDGETS: dict[str, int] = {
+    "minimal": 1024,
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+}
+_GEMINI3_FLASH_THINKING_LEVELS: dict[ThinkingLevel, str] = {
+    ThinkingLevel.MINIMAL: "minimal",
+    ThinkingLevel.LOW: "low",
+    ThinkingLevel.MEDIUM: "medium",
+    ThinkingLevel.HIGH: "high",
+    ThinkingLevel.XHIGH: "high",
+    ThinkingLevel.MAX: "high",
+}
+_GEMINI3_PRO_THINKING_LEVELS: dict[ThinkingLevel, str] = {
+    ThinkingLevel.MINIMAL: "low",
+    ThinkingLevel.LOW: "low",
+    ThinkingLevel.MEDIUM: "high",
+    ThinkingLevel.HIGH: "high",
+    ThinkingLevel.XHIGH: "high",
+    ThinkingLevel.MAX: "high",
+}
 _SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 
 
@@ -61,6 +83,36 @@ _SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 def _supports_multimodal_tool_result(model_id: str) -> bool:
     """Check if the model supports image data in function responses."""
     return model_id.startswith("gemini-3")
+
+
+def _uses_thinking_level(model_id: str) -> bool:
+    """Whether a Gemini model should use thinking_level instead of budget."""
+    return model_id.startswith("gemini-3")
+
+
+def _is_gemini3_pro(model_id: str) -> bool:
+    """Whether a Gemini 3 model is in the Pro family."""
+    return "-pro" in model_id
+
+
+def _normalize_gemini3_thinking_level(model_id: str, level: str) -> str:
+    """Clamp a user-provided thinking level to the model family's support."""
+    if _is_gemini3_pro(model_id):
+        return "low" if level in {"minimal", "low"} else "high"
+    return level
+
+
+def _reasoning_to_gemini3_thinking_level(
+    model_id: str,
+    reasoning: ThinkingLevel,
+) -> str:
+    """Map bampy's reasoning enum to Gemini 3's thinking_level values."""
+    mapping = (
+        _GEMINI3_PRO_THINKING_LEVELS
+        if _is_gemini3_pro(model_id)
+        else _GEMINI3_FLASH_THINKING_LEVELS
+    )
+    return mapping.get(reasoning, "high")
 
 
 def _requires_tool_call_id(model_id: str) -> bool:
@@ -345,16 +397,35 @@ def stream_gemini(
                 )
 
             # Thinking config
-            if (
-                options
-                and isinstance(options, GeminiOptions)
-                and options.thinking_budget is not None
-            ):
-                config_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=options.thinking_budget,
-                    include_thoughts=True,
-                )
-            elif model.reasoning:
+            if options and isinstance(options, GeminiOptions):
+                if (
+                    _uses_thinking_level(model.id)
+                    and options.thinking_level is not None
+                ):
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(
+                        thinking_level=_normalize_gemini3_thinking_level(
+                            model.id,
+                            options.thinking_level,
+                        ),
+                        include_thoughts=True,
+                    )
+                elif options.thinking_budget is not None:
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(
+                        thinking_budget=options.thinking_budget,
+                        include_thoughts=True,
+                    )
+                elif (
+                    not _uses_thinking_level(model.id)
+                    and options.thinking_level is not None
+                ):
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(
+                        thinking_budget=_GEMINI25_THINKING_LEVEL_BUDGETS[
+                            options.thinking_level
+                        ],
+                        include_thoughts=True,
+                    )
+
+            if "thinking_config" not in config_kwargs and model.reasoning:
                 config_kwargs["thinking_config"] = types.ThinkingConfig(
                     include_thoughts=True,
                 )
@@ -556,8 +627,15 @@ def stream_simple_gemini(
 
     if options is not None:
         thinking_budget = None
+        thinking_level = None
         if options.reasoning is not None and model.reasoning:
-            thinking_budget = _THINKING_BUDGETS.get(options.reasoning, 8192)
+            if _uses_thinking_level(model.id):
+                thinking_level = _reasoning_to_gemini3_thinking_level(
+                    model.id,
+                    options.reasoning,
+                )
+            else:
+                thinking_budget = _THINKING_BUDGETS.get(options.reasoning, 8192)
 
         gemini_opts = GeminiOptions(
             temperature=options.temperature,
@@ -567,6 +645,7 @@ def stream_simple_gemini(
             headers=options.headers,
             cancellation=options.cancellation,
             thinking_budget=thinking_budget,
+            thinking_level=thinking_level,
         )
 
     return stream_gemini(model, context, gemini_opts)

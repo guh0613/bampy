@@ -264,6 +264,7 @@ class OpenAIOptions(StreamOptions):
 
 class GeminiOptions(StreamOptions):
     thinking_budget: int | None = None
+    thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
 
 
 # ---------------------------------------------------------------------------

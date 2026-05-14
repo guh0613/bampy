@@ -33,7 +33,7 @@ from bampy.agent.types import (
 
 
 def _default_model():
-    return get_model("google", "gemini-2.5-flash-lite")
+    return get_model("gemini-3.1-flash-lite", provider="google")
 
 
 class Agent:

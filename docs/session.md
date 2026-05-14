@@ -84,7 +84,7 @@ NDJSON 文件中每行是一个条目，通过 `parent_id` 构成树形结构：
 {"type":"session","id":"abc","version":1,"timestamp":"2024-01-01T00:00:00Z"}
 {"type":"message","id":"m1","parent_id":null,"message":{"role":"user","content":"Hello"}}
 {"type":"message","id":"m2","parent_id":"m1","message":{"role":"assistant","content":[...]}}
-{"type":"model_change","id":"mc1","parent_id":"m2","provider":"openai","model_id":"gpt-4o"}
+{"type":"model_change","id":"mc1","parent_id":"m2","provider":"openai","model_id":"gpt-5.5"}
 {"type":"compaction","id":"c1","parent_id":"mc1","summary":"...","first_kept_entry_id":"m5"}
 ```
 
