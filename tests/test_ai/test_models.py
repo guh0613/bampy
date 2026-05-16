@@ -45,8 +45,12 @@ class TestModelRegistry:
         assert model.reasoning is True
         assert model.base_url == "https://opencode.ai/zen/go/v1"
         assert model.openai_chat_compat is not None
-        assert model.openai_chat_compat.replay_thinking_field == "reasoning"
-        assert model.openai_chat_compat.stream_reasoning_fields == ["reasoning"]
+        assert model.openai_chat_compat.replay_thinking_field == "reasoning_content"
+        assert model.openai_chat_compat.stream_reasoning_fields == [
+            "reasoning_content",
+            "reasoning",
+            "reasoning_details",
+        ]
         assert model.openai_chat_compat.max_tokens_field == "max_tokens"
 
     def test_get_builtin_opencode_go_glm_model_is_text_only(self):

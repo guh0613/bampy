@@ -331,7 +331,7 @@ def _chat_replay_payloads(
     """Build assistant reasoning fields used to replay prior chat thinking."""
     reasoning_fields = _chat_reasoning_fields(model)
     compat = model.openai_chat_compat
-    fallback_field = compat.replay_thinking_field if compat else None
+    replay_field = compat.replay_thinking_field if compat else None
     payloads: dict[str, Any] = {}
 
     for block in thinking_blocks:
@@ -339,12 +339,14 @@ def _chat_replay_payloads(
         field = (
             signature
             if isinstance(signature, str) and signature in reasoning_fields
-            else fallback_field
+            else replay_field
         )
         if not field:
             continue
         value = _chat_replay_value(field, block.thinking)
         if field == "reasoning_details":
+            # OpenRouter returns structured reasoning_details blocks; merge them
+            # by item identity instead of concatenating their JSON payloads.
             payloads[field] = _merge_reasoning_details_value(
                 payloads.get(field),
                 value,

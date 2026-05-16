@@ -101,8 +101,12 @@ def _kimi_chat_model() -> Model:
         max_tokens=65536,
         openai_chat_compat=OpenAIChatCompat(
             max_tokens_field="max_tokens",
-            replay_thinking_field="reasoning",
-            stream_reasoning_fields=["reasoning", "reasoning_details"],
+            replay_thinking_field="reasoning_content",
+            stream_reasoning_fields=[
+                "reasoning_content",
+                "reasoning",
+                "reasoning_details",
+            ],
             supports_reasoning_effort=False,
             thinking_param="kimi",
             thinking_default_enabled=True,
@@ -495,7 +499,7 @@ class TestChatCompletionMessageConversion:
         assert items[0]["content"] == "final answer"
         assert items[0]["reasoning_content"] == "deep thought"
 
-    def test_kimi_reasoning_replay_falls_back_to_configured_reasoning_field(self):
+    def test_kimi_reasoning_replay_falls_back_to_configured_reasoning_content_field(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
 
         assistant = AssistantMessage(
@@ -512,7 +516,30 @@ class TestChatCompletionMessageConversion:
 
         assert items[0]["role"] == "assistant"
         assert items[0]["content"] == "final answer"
+        assert items[0]["reasoning_content"] == "deep thought"
+
+    def test_kimi_reasoning_replay_preserves_old_reasoning_signature(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="opencode-go",
+            model="kimi-k2.6",
+            content=[
+                ThinkingContent(
+                    thinking="deep thought",
+                    thinking_signature="reasoning",
+                ),
+                TextContent(text="final answer"),
+            ],
+        )
+        ctx = Context(messages=[assistant])
+        items = _convert_chat_completion_messages(_kimi_chat_model(), ctx)
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["content"] == "final answer"
         assert items[0]["reasoning"] == "deep thought"
+        assert "reasoning_content" not in items[0]
 
     def test_deepseek_reasoning_replay_uses_reasoning_content(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
