@@ -197,8 +197,7 @@ def _chat_reasoning_fields(model: Model) -> tuple[str, ...]:
     """Return reasoning delta fields recognized by the chat-completions path."""
     compat = model.openai_chat_compat
     if compat and compat.stream_reasoning_fields:
-        fields = list(dict.fromkeys([*compat.stream_reasoning_fields, *_CHAT_REASONING_FIELDS]))
-        return tuple(fields)
+        return tuple(dict.fromkeys(compat.stream_reasoning_fields))
     return _CHAT_REASONING_FIELDS
 
 
@@ -336,11 +335,15 @@ def _chat_replay_payloads(
 
     for block in thinking_blocks:
         signature = block.thinking_signature
-        field = (
-            signature
-            if isinstance(signature, str) and signature in reasoning_fields
-            else replay_field
-        )
+        field = None
+        if isinstance(signature, str):
+            if signature not in reasoning_fields:
+                continue
+            field = signature
+            if replay_field and signature != "reasoning_details":
+                field = replay_field
+        elif replay_field:
+            field = replay_field
         if not field:
             continue
         value = _chat_replay_value(field, block.thinking)
@@ -1297,12 +1300,59 @@ def _map_chat_completion_finish_reason(
     return StopReason.ERROR, f"Unhandled finish_reason: {finish_reason}"
 
 
+def _is_empty_reasoning_value(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _is_structured_reasoning_field(field: str) -> bool:
+    return field == "reasoning_details"
+
+
+def _chat_reasoning_deltas(
+    delta: Any,
+    reasoning_fields: tuple[str, ...],
+) -> list[tuple[str, Any]]:
+    deltas: list[tuple[str, Any]] = []
+    for field in reasoning_fields:
+        value = _option_value(delta, field)
+        if not _is_empty_reasoning_value(value):
+            deltas.append((field, value))
+    return deltas
+
+
+def _chat_reasoning_deltas_for_replay(
+    deltas: list[tuple[str, Any]],
+    replay_field: str | None,
+) -> list[tuple[str, Any]]:
+    if not replay_field:
+        return deltas
+
+    scalar_deltas = [
+        item
+        for item in deltas
+        if not _is_structured_reasoning_field(item[0])
+    ]
+    if scalar_deltas:
+        return [scalar_deltas[0]]
+    return deltas[:1]
+
+
+def _chat_stream_thinking_signature(
+    field: str,
+    replay_field: str | None,
+) -> str:
+    if replay_field and not _is_structured_reasoning_field(field):
+        return replay_field
+    return field
+
+
 def _apply_chat_completion_delta(
     delta: Any,
     output: AssistantMessage,
     stream: AssistantMessageEventStream,
     *,
     reasoning_fields: tuple[str, ...],
+    replay_thinking_field: str | None,
     active_text_index: int | None,
     active_thinking_index: int | None,
     tool_indexes: dict[int, int],
@@ -1330,16 +1380,18 @@ def _apply_chat_completion_delta(
             partial=output,
         ))
 
-    for field in reasoning_fields:
-        reasoning_value = _option_value(delta, field)
-        if (
-            reasoning_value is None
-            or reasoning_value == ""
-            or reasoning_value == []
-            or reasoning_value == {}
-        ):
-            continue
+    reasoning_deltas = _chat_reasoning_deltas(delta, reasoning_fields)
+    reasoning_deltas = _chat_reasoning_deltas_for_replay(
+        reasoning_deltas,
+        replay_thinking_field,
+    )
+
+    for field, reasoning_value in reasoning_deltas:
         reasoning_delta = _chat_reasoning_value_to_text(reasoning_value)
+        thinking_signature = _chat_stream_thinking_signature(
+            field,
+            replay_thinking_field,
+        )
 
         if current_scalar_kind == "text":
             _end_text_block(output, stream, active_text_index)
@@ -1350,7 +1402,7 @@ def _apply_chat_completion_delta(
             block = output.content[active_thinking_index]
             reuse_current = (
                 isinstance(block, ThinkingContent)
-                and block.thinking_signature == field
+                and block.thinking_signature == thinking_signature
             )
         if current_scalar_kind != "thinking" or not reuse_current:
             if current_scalar_kind == "thinking":
@@ -1358,7 +1410,7 @@ def _apply_chat_completion_delta(
             active_thinking_index = _start_thinking_block(
                 output,
                 stream,
-                signature=field,
+                signature=thinking_signature,
             )
         current_scalar_kind = "thinking"
         thinking_block = output.content[active_thinking_index]
@@ -1475,6 +1527,7 @@ def stream_openai_completions(
             tool_json_bufs: dict[int, str] = {}
             closed_tool_indexes: set[int] = set()
             reasoning_fields = _chat_reasoning_fields(model)
+            compat = model.openai_chat_compat
 
             response = await client.chat.completions.create(**params)
             async for chunk in response:
@@ -1521,6 +1574,9 @@ def stream_openai_completions(
                     tool_indexes=tool_indexes,
                     tool_json_bufs=tool_json_bufs,
                     current_scalar_kind=current_scalar_kind,
+                    replay_thinking_field=(
+                        compat.replay_thinking_field if compat else None
+                    ),
                 )
 
             if current_scalar_kind == "text":
