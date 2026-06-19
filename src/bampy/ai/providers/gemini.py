@@ -147,9 +147,7 @@ def _convert_messages(model: Model, context: Context) -> list[Any]:
     contents: list[Any] = []
     transformed = transform_messages(
         context.messages,
-        target_model=model.id,
-        target_provider=model.provider,
-        target_api=model.api,
+        target=model,
         normalize_id=lambda tool_call_id, _source: _normalize_gemini_tool_call_id(
             tool_call_id, model.id
         ),

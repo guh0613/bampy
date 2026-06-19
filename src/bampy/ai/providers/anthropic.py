@@ -246,9 +246,7 @@ def _convert_messages(
     messages: list[dict[str, Any]] = []
     transformed = transform_messages(
         context.messages,
-        target_model=model.id,
-        target_provider=model.provider,
-        target_api=model.api,
+        target=model,
         normalize_id=lambda tool_call_id, _source: sanitize_tool_call_id(tool_call_id),
     )
 

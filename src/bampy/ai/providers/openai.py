@@ -517,9 +517,7 @@ def _convert_messages(
 
     transformed = transform_messages(
         context.messages,
-        target_model=model.id,
-        target_provider=model.provider,
-        target_api=model.api,
+        target=model,
         normalize_id=lambda tool_call_id, source: _normalize_responses_tool_call_id(
             tool_call_id, source, model
         ),
@@ -709,9 +707,7 @@ def _convert_chat_completion_messages(
 
     transformed = transform_messages(
         context.messages,
-        target_model=model.id,
-        target_provider=model.provider,
-        target_api=model.api,
+        target=model,
         normalize_id=_normalize_chat_tool_call_id,
     )
 

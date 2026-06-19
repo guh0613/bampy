@@ -146,14 +146,19 @@ def _deepseek_chat_model() -> Model:
     )
 
 
-def _responses_model(*, model_id: str = "gpt-5.4", reasoning: bool = True) -> Model:
+def _responses_model(
+    *,
+    model_id: str = "gpt-5.4",
+    reasoning: bool = True,
+    input_types: list[str] | None = None,
+) -> Model:
     return Model(
         id=model_id,
         name=model_id,
         api="openai-responses",
         provider="openai",
         reasoning=reasoning,
-        input_types=["text", "image"],
+        input_types=input_types if input_types is not None else ["text", "image"],
         base_url="https://api.openai.com/v1",
         max_tokens=16384,
     )
@@ -281,6 +286,23 @@ class TestMessageConversion:
         assert items[0]["type"] == "function_call_output"
         assert items[0]["output"] == "Read image file [image/png]\n[image]"
 
+    def test_text_only_model_downgrades_tool_result_image_before_conversion(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        model = _responses_model(input_types=["text"])
+        ctx = Context(messages=[
+            ToolResultMessage(
+                tool_call_id="call_1",
+                tool_name="read",
+                content=[ImageContent(data="aGVsbG8=", mime_type="image/png")],
+            ),
+        ])
+
+        items = _convert_messages(model, ctx, allow_tool_result_images=True)
+
+        assert items[0]["type"] == "function_call_output"
+        assert items[0]["output"] == "(tool image omitted: model does not support images)"
+
     def test_thinking_skipped_in_conversion(self):
         from bampy.ai.providers.openai import _convert_messages
 
@@ -341,6 +363,27 @@ class TestMessageConversion:
         assert isinstance(content, list)
         assert content[0]["type"] == "input_text"
         assert content[1]["type"] == "input_image"
+
+    def test_text_only_model_downgrades_user_image_for_responses(self):
+        from bampy.ai.providers.openai import _convert_messages
+
+        model = _responses_model(input_types=["text"])
+        ctx = Context(messages=[
+            UserMessage(content=[
+                TextContent(text="What is this?"),
+                ImageContent(data="aGVsbG8=", mime_type="image/png"),
+            ]),
+        ])
+
+        items = _convert_messages(model, ctx)
+
+        assert items[0]["content"] == [
+            {"type": "input_text", "text": "What is this?"},
+            {
+                "type": "input_text",
+                "text": "(image omitted: model does not support images)",
+            },
+        ]
 
     def test_different_model_handoff_omits_responses_item_id(self):
         from bampy.ai.providers.openai import _convert_messages
@@ -467,6 +510,29 @@ class TestChatCompletionMessageConversion:
         assert items[1]["role"] == "user"
         assert items[1]["content"][0]["type"] == "text"
         assert items[1]["content"][1]["type"] == "image_url"
+
+    def test_text_only_model_downgrades_user_image_for_chat_completions(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        ctx = Context(messages=[
+            UserMessage(content=[
+                TextContent(text="What is this?"),
+                ImageContent(data="aGVsbG8=", mime_type="image/png"),
+            ]),
+        ])
+
+        items = _convert_chat_completion_messages(
+            _chat_model(input_types=["text"]),
+            ctx,
+        )
+
+        assert items[0]["content"] == [
+            {"type": "text", "text": "What is this?"},
+            {
+                "type": "text",
+                "text": "(image omitted: model does not support images)",
+            },
+        ]
 
     def test_reasoning_signature_roundtrips_for_chat_completions(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages

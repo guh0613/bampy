@@ -6,6 +6,8 @@ from bampy.ai.providers._transform import (
 )
 from bampy.ai.types import (
     AssistantMessage,
+    ImageContent,
+    Model,
     StopReason,
     TextContent,
     ThinkingContent,
@@ -13,6 +15,22 @@ from bampy.ai.types import (
     ToolResultMessage,
     UserMessage,
 )
+
+
+def _target_model(
+    *,
+    model_id: str,
+    provider: str,
+    api: str,
+    input_types: list[str] | None = None,
+) -> Model:
+    return Model(
+        id=model_id,
+        name=model_id,
+        provider=provider,
+        api=api,
+        input_types=input_types if input_types is not None else ["text", "image"],
+    )
 
 
 class TestSanitizeToolCallId:
@@ -50,9 +68,11 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="claude-new",
-            target_provider="anthropic",
-            target_api="anthropic-messages",
+            target=_target_model(
+                model_id="claude-new",
+                provider="anthropic",
+                api="anthropic-messages",
+            ),
         )
         assert len(result) == 1
         msg = result[0]
@@ -71,9 +91,11 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="claude-sonnet-4-6",
-            target_provider="anthropic",
-            target_api="anthropic-messages",
+            target=_target_model(
+                model_id="claude-sonnet-4-6",
+                provider="anthropic",
+                api="anthropic-messages",
+            ),
         )
         msg = result[0]
         assert isinstance(msg, AssistantMessage)
@@ -92,9 +114,11 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="claude-new",
-            target_provider="anthropic",
-            target_api="anthropic-messages",
+            target=_target_model(
+                model_id="claude-new",
+                provider="anthropic",
+                api="anthropic-messages",
+            ),
         )
         msg = result[0]
         assert isinstance(msg, AssistantMessage)
@@ -111,9 +135,11 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="claude-same",
-            target_provider="anthropic",
-            target_api="anthropic-messages",
+            target=_target_model(
+                model_id="claude-same",
+                provider="anthropic",
+                api="anthropic-messages",
+            ),
         )
         msg = result[0]
         assert isinstance(msg, AssistantMessage)
@@ -179,9 +205,11 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="gpt-5.4",
-            target_provider="openai",
-            target_api="openai-responses",
+            target=_target_model(
+                model_id="gpt-5.4",
+                provider="openai",
+                api="openai-responses",
+            ),
         )
         tc = result[0].content[0]
         assert isinstance(tc, ToolCall)
@@ -208,15 +236,88 @@ class TestTransformMessages:
         ]
         result = transform_messages(
             messages,
-            target_model="claude-sonnet-4-6",
-            target_provider="anthropic",
-            target_api="anthropic-messages",
+            target=_target_model(
+                model_id="claude-sonnet-4-6",
+                provider="anthropic",
+                api="anthropic-messages",
+            ),
         )
         msg = result[0]
         assert isinstance(msg, AssistantMessage)
         tool_call = msg.content[0]
         assert isinstance(tool_call, ToolCall)
         assert tool_call.thought_signature is None
+
+    def test_images_are_downgraded_for_text_only_target_without_mutating_history(self):
+        user_message = UserMessage(
+            content=[
+                TextContent(text="before"),
+                ImageContent(data="YQ==", mime_type="image/png"),
+                ImageContent(data="Yg==", mime_type="image/jpeg"),
+                TextContent(text="between"),
+                ImageContent(data="Yw==", mime_type="image/webp"),
+            ]
+        )
+        tool_result = ToolResultMessage(
+            tool_call_id="call_1",
+            tool_name="read",
+            content=[
+                ImageContent(data="ZA==", mime_type="image/png"),
+                ImageContent(data="ZQ==", mime_type="image/png"),
+            ],
+        )
+
+        result = transform_messages(
+            [user_message, tool_result],
+            target=_target_model(
+                model_id="text-only",
+                provider="custom",
+                api="openai-completions",
+                input_types=["text"],
+            ),
+        )
+
+        transformed_user = result[0]
+        transformed_tool = result[1]
+        assert isinstance(transformed_user, UserMessage)
+        assert isinstance(transformed_user.content, list)
+        assert [block.text for block in transformed_user.content] == [
+            "before",
+            "(image omitted: model does not support images)",
+            "between",
+            "(image omitted: model does not support images)",
+        ]
+        assert isinstance(transformed_tool, ToolResultMessage)
+        assert [block.text for block in transformed_tool.content] == [
+            "(tool image omitted: model does not support images)"
+        ]
+
+        assert isinstance(user_message.content, list)
+        assert sum(isinstance(block, ImageContent) for block in user_message.content) == 3
+        assert sum(isinstance(block, ImageContent) for block in tool_result.content) == 2
+
+    def test_images_are_preserved_for_multimodal_target(self):
+        message = UserMessage(
+            content=[
+                TextContent(text="describe"),
+                ImageContent(data="YQ==", mime_type="image/png"),
+            ]
+        )
+
+        result = transform_messages(
+            [message],
+            target=_target_model(
+                model_id="vision",
+                provider="custom",
+                api="openai-completions",
+                input_types=["text", "image"],
+            ),
+        )
+
+        transformed = result[0]
+        assert isinstance(transformed, UserMessage)
+        assert isinstance(transformed.content, list)
+        assert isinstance(transformed.content[1], ImageContent)
 
     def test_error_assistant_message_skipped(self):
         messages = [

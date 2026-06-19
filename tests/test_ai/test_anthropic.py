@@ -69,14 +69,19 @@ def _opts(**kw) -> AnthropicOptions:
     return AnthropicOptions(api_key=_API_KEY, headers=headers, **kw)
 
 
-def _unit_model(*, model_id: str = "claude-sonnet-4-6", reasoning: bool = True) -> Model:
+def _unit_model(
+    *,
+    model_id: str = "claude-sonnet-4-6",
+    reasoning: bool = True,
+    input_types: list[str] | None = None,
+) -> Model:
     return Model(
         id=model_id,
         name=model_id,
         api="anthropic-messages",
         provider="anthropic",
         reasoning=reasoning,
-        input_types=["text", "image"],
+        input_types=input_types if input_types is not None else ["text", "image"],
         max_tokens=16384,
     )
 
@@ -204,6 +209,36 @@ class TestMessageConversion:
         assert len(content) == 2
         assert content[1]["type"] == "image"
         assert content[1]["source"]["media_type"] == "image/png"
+
+    def test_text_only_model_downgrades_user_and_tool_images(self):
+        from bampy.ai.providers.anthropic import _convert_messages
+
+        model = _unit_model(input_types=["text"])
+        ctx = Context(messages=[
+            UserMessage(content=[
+                TextContent(text="What is this?"),
+                ImageContent(data="aGVsbG8=", mime_type="image/png"),
+            ]),
+            ToolResultMessage(
+                tool_call_id="toolu_1",
+                tool_name="read",
+                content=[ImageContent(data="d29ybGQ=", mime_type="image/png")],
+            ),
+        ])
+
+        _, messages = _convert_messages(model, ctx)
+
+        assert messages[0]["content"] == [
+            {"type": "text", "text": "What is this?"},
+            {
+                "type": "text",
+                "text": "(image omitted: model does not support images)",
+            },
+        ]
+        assert (
+            messages[1]["content"][0]["content"]
+            == "(tool image omitted: model does not support images)"
+        )
 
     def test_cross_model_thinking_downgraded_to_text(self):
         from bampy.ai.providers.anthropic import _convert_messages

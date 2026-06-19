@@ -65,14 +65,19 @@ def _opts(**kw) -> GeminiOptions:
     return GeminiOptions(api_key=_API_KEY, **kw)
 
 
-def _unit_model(*, model_id: str = "gemini-3.1-flash-lite", reasoning: bool = True) -> Model:
+def _unit_model(
+    *,
+    model_id: str = "gemini-3.1-flash-lite",
+    reasoning: bool = True,
+    input_types: list[str] | None = None,
+) -> Model:
     return Model(
         id=model_id,
         name=model_id,
         api="google-generative-ai",
         provider="google",
         reasoning=reasoning,
-        input_types=["text", "image"],
+        input_types=input_types if input_types is not None else ["text", "image"],
         max_tokens=16384,
     )
 
@@ -186,6 +191,40 @@ class TestMessageConversion:
         parts = contents[0].parts
         assert len(parts) == 2
         assert parts[1].inline_data.mime_type == "image/png"
+
+    def test_text_only_model_downgrades_user_and_tool_images(self):
+        from bampy.ai.providers.gemini import _convert_messages
+
+        model = _unit_model(input_types=["text"])
+        user_contents = _convert_messages(
+            model,
+            Context(messages=[
+                UserMessage(content=[
+                    TextContent(text="What is this?"),
+                    ImageContent(data="aGVsbG8=", mime_type="image/png"),
+                ]),
+            ]),
+        )
+        tool_contents = _convert_messages(
+            model,
+            Context(messages=[
+                ToolResultMessage(
+                    tool_call_id="c1",
+                    tool_name="read",
+                    content=[ImageContent(data="d29ybGQ=", mime_type="image/png")],
+                ),
+            ]),
+        )
+
+        assert [part.text for part in user_contents[0].parts] == [
+            "What is this?",
+            "(image omitted: model does not support images)",
+        ]
+        function_response = tool_contents[0].parts[0].function_response
+        assert function_response.response == {
+            "result": "(tool image omitted: model does not support images)"
+        }
+        assert not function_response.parts
 
     def test_tool_result_with_image_gemini3(self):
         """Gemini 3.x: ImageContent → FunctionResponse.parts with inline_data."""

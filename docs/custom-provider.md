@@ -117,10 +117,14 @@ BUILTIN_MODELS.append(Model(
     context_window=128_000,
     max_tokens=8192,
     reasoning=True,             # 是否支持推理
-    input_types=["text", "image"],
+    input_types=["text", "image"],  # 纯文本模型使用 ["text"]
     cost=ModelCost(input=1.0, output=3.0),
 ))
 ```
+
+`input_types` 必须按模型的真实输入能力填写。所有内置 provider 都会在统一消息转换层
+读取该字段；纯文本模型收到历史消息、用户消息或工具结果中的图片时，图片会被降级为
+文本占位，而不会进入 provider 请求体。
 
 ### 4. 添加可选依赖
 

@@ -7,7 +7,9 @@ from typing import Callable
 
 from bampy.ai.types import (
     AssistantMessage,
+    ImageContent,
     Message,
+    Model,
     TextContent,
     ThinkingContent,
     ToolCall,
@@ -17,6 +19,8 @@ from bampy.ai.types import (
 
 _MAX_ID_LEN = 64
 NormalizeId = Callable[[str, AssistantMessage], str]
+_NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
+_NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
 
 
 def sanitize_tool_call_id(tool_call_id: str) -> str:
@@ -29,30 +33,97 @@ def sanitize_tool_call_id(tool_call_id: str) -> str:
     return sanitized[:_MAX_ID_LEN]
 
 
+def _default_normalize_id(tool_call_id: str, _source: AssistantMessage) -> str:
+    return sanitize_tool_call_id(tool_call_id)
+
+
+def _replace_images_with_placeholder(
+    content: list[TextContent | ImageContent],
+    placeholder: str,
+) -> list[TextContent]:
+    result: list[TextContent] = []
+    previous_was_placeholder = False
+
+    for block in content:
+        if isinstance(block, ImageContent):
+            if not previous_was_placeholder:
+                result.append(TextContent(text=placeholder))
+            previous_was_placeholder = True
+            continue
+
+        result.append(block)
+        previous_was_placeholder = block.text == placeholder
+
+    return result
+
+
+def _downgrade_unsupported_images(
+    messages: list[Message],
+    target: Model | None,
+) -> list[Message]:
+    if target is None or "image" in target.input_types:
+        return messages
+
+    transformed: list[Message] = []
+    for message in messages:
+        if isinstance(message, UserMessage) and isinstance(message.content, list):
+            transformed.append(
+                message.model_copy(
+                    update={
+                        "content": _replace_images_with_placeholder(
+                            message.content,
+                            _NON_VISION_USER_IMAGE_PLACEHOLDER,
+                        )
+                    }
+                )
+            )
+            continue
+
+        if isinstance(message, ToolResultMessage):
+            transformed.append(
+                message.model_copy(
+                    update={
+                        "content": _replace_images_with_placeholder(
+                            message.content,
+                            _NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+                        )
+                    }
+                )
+            )
+            continue
+
+        transformed.append(message)
+
+    return transformed
+
+
 def transform_messages(
     messages: list[Message],
     *,
-    target_model: str | None = None,
-    target_provider: str | None = None,
-    target_api: str | None = None,
+    target: Model | None = None,
     normalize_id: NormalizeId | None = None,
 ) -> list[Message]:
     """Transform a message list for cross-provider compatibility.
     """
     if normalize_id is None:
-        normalize_id = lambda tool_call_id, _source: sanitize_tool_call_id(tool_call_id)
+        normalize_id = _default_normalize_id
+
+    image_aware_messages = _downgrade_unsupported_images(messages, target)
 
     # Pass 1: per-message transforms
     transformed: list[Message] = []
     id_map: dict[str, str] = {}  # old_id → new_id
 
-    for msg in messages:
+    for msg in image_aware_messages:
         if isinstance(msg, UserMessage):
             transformed.append(msg)
 
         elif isinstance(msg, AssistantMessage):
             new_content = _transform_assistant_content(
-                msg, target_model, target_provider, target_api, normalize_id, id_map
+                msg,
+                target,
+                normalize_id,
+                id_map,
             )
             new_msg = msg.model_copy(update={"content": new_content})
             transformed.append(new_msg)
@@ -70,18 +141,16 @@ def transform_messages(
 
 def _transform_assistant_content(
     msg: AssistantMessage,
-    target_model: str | None,
-    target_provider: str | None,
-    target_api: str | None,
-    normalize_id: Callable[[str], str],
+    target: Model | None,
+    normalize_id: NormalizeId,
     id_map: dict[str, str],
 ) -> list:
     """Transform content blocks of an assistant message."""
     same_model = (
-        target_model is not None
-        and target_model == msg.model
-        and target_provider == msg.provider
-        and target_api == msg.api
+        target is not None
+        and target.id == msg.model
+        and target.provider == msg.provider
+        and target.api == msg.api
     )
     new_content = []
 

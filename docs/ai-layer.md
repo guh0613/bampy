@@ -176,11 +176,17 @@ register_model(Model(
     api="openai-completions",  # 或 "openai-responses"
     provider="custom",
     base_url="https://my-api.example.com/v1",
+    input_types=["text"],       # 多模态模型使用 ["text", "image"]
     context_window=128_000,
     max_tokens=8192,
     cost=ModelCost(input=1.0, output=3.0),
 ))
 ```
+
+`Model.input_types` 是发送请求时的能力依据。对于不包含 `"image"` 的模型，
+bampy 会在 provider 序列化之前把用户消息和工具结果中的图片替换成明确的文本占位，
+避免向纯文本模型发送不受支持的图片字段。转换只作用于本次请求的消息副本，
+不会修改内存或持久化的原始会话历史。
 
 ## 提供商特有选项
 
