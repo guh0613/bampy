@@ -298,10 +298,11 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             base_url=_OPENCODE_GO_BASE_URL,
             reasoning=True,
             context_window=262_144,
-            max_tokens=262_144,
+            max_tokens=32_768,
             cost=_cost(input=0.95, output=4.0, cache_read=0.19),
             openai_chat_compat=OpenAIChatCompat(
                 max_tokens_field="max_tokens",
+                system_role="system",
                 replay_thinking_field="reasoning_content",
                 stream_reasoning_fields=[
                     "reasoning_content",
@@ -309,6 +310,7 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
                     "reasoning_details",
                 ],
                 supports_reasoning_effort=False,
+                supports_store=False,
                 thinking_param="kimi",
                 thinking_default_enabled=True,
                 thinking_tool_choice=["auto", "none"],
@@ -326,6 +328,7 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             cost=_cost(input=0.95, output=4.0, cache_read=0.16),
             openai_chat_compat=OpenAIChatCompat(
                 max_tokens_field="max_tokens",
+                system_role="system",
                 replay_thinking_field="reasoning_content",
                 stream_reasoning_fields=[
                     "reasoning_content",
@@ -333,6 +336,7 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
                     "reasoning_details",
                 ],
                 supports_reasoning_effort=False,
+                supports_store=False,
                 thinking_param="kimi",
                 thinking_default_enabled=True,
                 thinking_tool_choice=["auto", "none"],
@@ -351,9 +355,11 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             cost=_cost(input=1.4, output=4.4, cache_read=0.26),
             openai_chat_compat=OpenAIChatCompat(
                 max_tokens_field="max_tokens",
+                system_role="system",
                 replay_thinking_field="reasoning_content",
                 stream_reasoning_fields=["reasoning_content"],
                 supports_reasoning_effort=True,
+                supports_store=False,
                 reasoning_effort_map=_ZAI_GLM_5_2_REASONING_EFFORT_MAP,
                 thinking_param="zai",
                 thinking_default_enabled=True,
@@ -372,9 +378,11 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             cost=_cost(input=0.95, output=4.0, cache_read=0.16),
             openai_chat_compat=OpenAIChatCompat(
                 max_tokens_field="max_tokens",
+                system_role="system",
                 replay_thinking_field="reasoning_content",
                 stream_reasoning_fields=["reasoning_content"],
                 supports_reasoning_effort=False,
+                supports_store=False,
                 thinking_param="zai",
                 thinking_default_enabled=True,
             ),

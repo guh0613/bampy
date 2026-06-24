@@ -101,6 +101,7 @@ def _kimi_chat_model() -> Model:
         max_tokens=65536,
         openai_chat_compat=OpenAIChatCompat(
             max_tokens_field="max_tokens",
+            system_role="system",
             replay_thinking_field="reasoning_content",
             stream_reasoning_fields=[
                 "reasoning_content",
@@ -108,6 +109,7 @@ def _kimi_chat_model() -> Model:
                 "reasoning_details",
             ],
             supports_reasoning_effort=False,
+            supports_store=False,
             thinking_param="kimi",
             thinking_default_enabled=True,
             thinking_tool_choice=["auto", "none"],
@@ -900,15 +902,18 @@ class TestChatCompletionStreaming:
         model = _kimi_chat_model()
         params = _build_chat_completion_params(
             model,
-            Context(messages=[UserMessage(content="Hello")]),
+            Context(system_prompt="Be precise.", messages=[UserMessage(content="Hello")]),
             OpenAIOptions(api_key="test-key", max_tokens=321, reasoning_effort="high"),
         )
 
+        assert params["messages"][0]["role"] == "system"
+        assert params["messages"][1]["role"] == "user"
         assert params["max_tokens"] == 321
         assert "max_completion_tokens" not in params
         assert params["extra_body"] == {"thinking": {"type": "enabled"}}
         assert "thinking" not in params
         assert "reasoning_effort" not in params
+        assert "store" not in params
 
     def test_build_chat_completion_params_rejects_invalid_tool_choice_for_kimi(self):
         from bampy.ai.providers.openai import _build_chat_completion_params

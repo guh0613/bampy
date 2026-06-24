@@ -52,12 +52,17 @@ class TestModelRegistry:
             "reasoning_details",
         ]
         assert model.openai_chat_compat.max_tokens_field == "max_tokens"
+        assert model.openai_chat_compat.system_role == "system"
+        assert model.openai_chat_compat.supports_store is False
 
     def test_get_builtin_opencode_go_glm_model_is_text_only(self):
         model = get_model("glm-5.1", provider="opencode-go")
         assert model is not None
         assert model.api == "openai-completions"
         assert model.input_types == ["text"]
+        assert model.openai_chat_compat is not None
+        assert model.openai_chat_compat.system_role == "system"
+        assert model.openai_chat_compat.supports_store is False
 
     def test_get_builtin_opencode_go_latest_coding_models(self):
         kimi = get_model("kimi-k2.7-code", provider="opencode-go")
@@ -68,11 +73,13 @@ class TestModelRegistry:
         assert kimi.reasoning is True
         assert kimi.input_types == ["text", "image"]
         assert kimi.context_window == 262_144
-        assert kimi.max_tokens == 262_144
+        assert kimi.max_tokens == 32_768
         assert kimi.cost.input == 0.95
         assert kimi.cost.output == 4.0
         assert kimi.cost.cache_read == 0.19
         assert kimi.openai_chat_compat is not None
+        assert kimi.openai_chat_compat.system_role == "system"
+        assert kimi.openai_chat_compat.supports_store is False
         assert kimi.openai_chat_compat.thinking_param == "kimi"
         assert kimi.openai_chat_compat.supports_reasoning_effort is False
         assert kimi.openai_chat_compat.thinking_tool_choice == ["auto", "none"]
@@ -87,6 +94,8 @@ class TestModelRegistry:
         assert glm.cost.output == 4.4
         assert glm.cost.cache_read == 0.26
         assert glm.openai_chat_compat is not None
+        assert glm.openai_chat_compat.system_role == "system"
+        assert glm.openai_chat_compat.supports_store is False
         assert glm.openai_chat_compat.thinking_param == "zai"
         assert glm.openai_chat_compat.supports_reasoning_effort is True
         assert glm.openai_chat_compat.reasoning_effort_map["xhigh"] == "max"
