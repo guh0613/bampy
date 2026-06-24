@@ -97,6 +97,30 @@ class TestContextEstimation:
         assert estimate.tokens == 65
         assert estimate.last_usage_index == 1
 
+    def test_uses_last_non_error_assistant_usage_from_persisted_dicts(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [],
+                "usage": {"total_tokens": 120},
+                "stop_reason": "error",
+            },
+            {
+                "role": "assistant",
+                "content": [],
+                "usage": {"total_tokens": 64},
+                "stop_reason": "stop",
+            },
+            {"role": "user", "content": "tail"},
+        ]
+
+        estimate = estimate_context_tokens(messages)
+
+        assert estimate.usage_tokens == 64
+        assert estimate.trailing_tokens == 1
+        assert estimate.tokens == 65
+        assert estimate.last_usage_index == 1
+
 
 class TestCutPointsAndPreparation:
     def test_find_cut_point_detects_split_turn(self):

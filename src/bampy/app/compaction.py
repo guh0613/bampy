@@ -147,17 +147,25 @@ class ContextUsageEstimate:
 
 def _get_assistant_usage(msg: Any) -> Usage | None:
     """Get usage from an assistant message, skipping error/aborted."""
-    if getattr(msg, "role", None) != "assistant":
-        return None
-    usage = getattr(msg, "usage", None)
+    if isinstance(msg, dict):
+        if msg.get("role") != "assistant":
+            return None
+        usage = msg.get("usage")
+        stop_reason = msg.get("stop_reason")
+    else:
+        if getattr(msg, "role", None) != "assistant":
+            return None
+        usage = getattr(msg, "usage", None)
+        stop_reason = getattr(msg, "stop_reason", None)
+
     if usage is None:
         return None
-    stop_reason = getattr(msg, "stop_reason", None)
     if stop_reason in (StopReason.ABORTED, StopReason.ERROR, "aborted", "error"):
         return None
-    if isinstance(usage, dict):
-        return Usage(**usage)
-    return usage
+    usage_obj = Usage(**usage) if isinstance(usage, dict) else usage
+    if calculate_context_tokens(usage_obj) <= 0:
+        return None
+    return usage_obj
 
 
 def estimate_context_tokens(messages: list[Any]) -> ContextUsageEstimate:

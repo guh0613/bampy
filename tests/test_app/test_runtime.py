@@ -323,6 +323,165 @@ class TestAgentSession:
         assert session.messages[0].role == "compaction_summary"
         assert any(isinstance(entry, CompactionEntry) for entry in session.session_manager.get_entries())
 
+    async def test_auto_compaction_runs_between_tool_turns_before_next_model_call(self, monkeypatch):
+        compact_calls: list[object] = []
+        second_call_first_text: list[str] = []
+
+        async def fake_compact(
+            preparation,
+            model,
+            api_key,
+            custom_instructions=None,
+            cancellation=None,
+        ):
+            del model, api_key, custom_instructions, cancellation
+            compact_calls.append(preparation)
+            return CompactionResult(
+                summary="summary text",
+                first_kept_entry_id=preparation.first_kept_entry_id,
+                tokens_before=preparation.tokens_before,
+            )
+
+        monkeypatch.setattr("bampy.app.runtime.compact", fake_compact)
+
+        class EchoTool:
+            name = "echo"
+            label = "Echo"
+            description = "Echo test tool"
+            parameters = {"type": "object", "properties": {}}
+
+            async def execute(
+                self,
+                tool_call_id,
+                params,
+                cancellation=None,
+                on_update=None,
+            ):
+                del tool_call_id, params, cancellation, on_update
+                return AgentToolResult(content=[TextContent(text="tool output")])
+
+        call_index = {"value": 0}
+
+        def stream_fn(model, context, options):
+            del options
+            call_index["value"] += 1
+            if call_index["value"] == 1:
+                return done_stream(
+                    AssistantMessage(
+                        api=model.api,
+                        provider=model.provider,
+                        model=model.id,
+                        content=[ToolCall(id="call-1", name="echo", arguments={})],
+                        usage=Usage(total_tokens=95),
+                        stop_reason=StopReason.TOOL_USE,
+                    )
+                )
+            if call_index["value"] == 2:
+                first = context.messages[0]
+                content = first.content
+                if isinstance(content, list) and content and hasattr(content[0], "text"):
+                    second_call_first_text.append(content[0].text)
+                return done_stream(
+                    AssistantMessage(
+                        api=model.api,
+                        provider=model.provider,
+                        model=model.id,
+                        content=[TextContent(text="final after compaction")],
+                        stop_reason=StopReason.STOP,
+                    )
+                )
+            return done_stream(
+                AssistantMessage(
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    content=[TextContent(text="unexpected extra call")],
+                    stop_reason=StopReason.STOP,
+                )
+            )
+
+        events: list[str] = []
+        session = AgentSession(
+            cwd="/repo",
+            model=create_model(context_window=100),
+            session_manager=SessionManager.in_memory("/repo"),
+            tools=[EchoTool()],
+            active_tool_names=["echo"],
+            stream_fn=stream_fn,
+            compaction_settings=CompactionSettings(
+                enabled=True,
+                reserve_tokens=10,
+                keep_recent_tokens=1,
+            ),
+            auto_compaction=True,
+        )
+        session.subscribe(lambda event: events.append(event.type))
+
+        await session.prompt("trigger provider error")
+
+        assert len(compact_calls) == 1
+        assert "auto_compaction_start" in events
+        assert "auto_compaction_end" in events
+        assert any(isinstance(entry, CompactionEntry) for entry in session.session_manager.get_entries())
+        assert second_call_first_text and "summary text" in second_call_first_text[0]
+        assert session.messages[-1].role == "assistant"
+        assert session.messages[-1].content[0].text == "final after compaction"
+
+        message_entries = [
+            entry
+            for entry in session.session_manager.get_entries()
+            if isinstance(entry, SessionMessageEntry)
+        ]
+        assert not any(entry.message.get("stop_reason") == StopReason.ERROR for entry in message_entries)
+        assert message_entries[-1].message["role"] == "assistant"
+        assert message_entries[-1].message["content"][0]["text"] == "final after compaction"
+
+    async def test_auto_compaction_does_not_recover_non_context_terminal_error(self, monkeypatch):
+        compact_calls: list[object] = []
+
+        async def fake_compact(
+            preparation,
+            model,
+            api_key,
+            custom_instructions=None,
+            cancellation=None,
+        ):
+            del model, api_key, custom_instructions, cancellation
+            compact_calls.append(preparation)
+            return CompactionResult(
+                summary="summary text",
+                first_kept_entry_id=preparation.first_kept_entry_id,
+                tokens_before=preparation.tokens_before,
+            )
+
+        monkeypatch.setattr("bampy.app.runtime.compact", fake_compact)
+
+        session = AgentSession(
+            cwd="/repo",
+            model=create_model(context_window=100),
+            session_manager=SessionManager.in_memory("/repo"),
+            stream_fn=lambda model, context, options: (_ for _ in ()).throw(RuntimeError("provider unavailable")),
+            compaction_settings=CompactionSettings(
+                enabled=True,
+                reserve_tokens=10,
+                keep_recent_tokens=1,
+            ),
+            auto_compaction=True,
+        )
+
+        await session.prompt("trigger provider error")
+
+        assert compact_calls == []
+        assert not any(isinstance(entry, CompactionEntry) for entry in session.session_manager.get_entries())
+
+        message_entries = [
+            entry
+            for entry in session.session_manager.get_entries()
+            if isinstance(entry, SessionMessageEntry)
+        ]
+        assert message_entries[-1].message["role"] == "assistant"
+        assert message_entries[-1].message["stop_reason"] == StopReason.ERROR
+
     def test_reload_session_context_preserves_current_model_overrides(self):
         session_manager = SessionManager.in_memory("/repo")
         overridden_model = create_model().model_copy(

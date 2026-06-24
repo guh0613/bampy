@@ -173,6 +173,19 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def _last_assistant_message(messages: list[AgentMessage]) -> AgentMessage | None:
+    for message in reversed(messages):
+        if message_role(message) == "assistant":
+            return message
+    return None
+
+
+def _assistant_stop_reason(message: AgentMessage) -> Any:
+    if isinstance(message, dict):
+        return message.get("stop_reason")
+    return getattr(message, "stop_reason", None)
+
+
 @dataclass(slots=True)
 class AutoCompactionStartEvent:
     type: Literal["auto_compaction_start"] = "auto_compaction_start"
@@ -544,7 +557,8 @@ class AgentSession:
         messages: list[AgentMessage],
         cancellation: Any | None = None,
     ) -> list[AgentMessage]:
-        transformed = await self.extension_runner.emit_context(list(messages))
+        active_messages = await self._maybe_auto_compact_messages(messages)
+        transformed = await self.extension_runner.emit_context(active_messages)
         if self._user_transform_context is not None:
             maybe_messages = await _maybe_await(self._user_transform_context(transformed, cancellation))
             if maybe_messages is not None:
@@ -639,10 +653,11 @@ class AgentSession:
             self._turn_index += 1
         elif event.type == "message_end" and isinstance(event.message, AssistantMessage):
             self._last_assistant_message = event.message
-        elif event.type == "agent_end" and self._auto_compaction and self._last_assistant_message is not None:
-            assistant_message = self._last_assistant_message
+        elif event.type == "agent_end" and self._auto_compaction:
+            assistant_message = _last_assistant_message(event.messages) or self._last_assistant_message
             self._last_assistant_message = None
-            await self._check_auto_compaction(assistant_message)
+            if assistant_message is not None:
+                await self._handle_agent_end_auto_compaction(assistant_message)
 
         self._emit(event)
 
@@ -753,31 +768,55 @@ class AgentSession:
 
         self.session_manager.append_message(last_message)
 
-    async def _check_auto_compaction(self, assistant_message: AssistantMessage) -> None:
-        if assistant_message.stop_reason in (StopReason.ABORTED, "aborted"):
+    async def _handle_agent_end_auto_compaction(self, assistant_message: AgentMessage) -> None:
+        stop_reason = _assistant_stop_reason(assistant_message)
+        if stop_reason in (StopReason.ABORTED, "aborted"):
+            return
+        if stop_reason in (StopReason.ERROR, "error"):
             return
         await self._maybe_auto_compact()
 
-    async def _maybe_auto_compact(self) -> None:
+    async def _maybe_auto_compact(self) -> CompactionResult | None:
         if self._is_compacting:
-            return
+            return None
         if not self.agent.state.messages:
-            return
+            return None
 
-        context_tokens = self._estimate_current_context_tokens()
+        context_tokens = self._estimate_current_context_tokens(self.agent.state.messages)
         if not should_compact(
             context_tokens,
             self.agent.state.model.context_window,
             self._compaction_settings,
         ):
-            return
+            return None
 
-        await self._run_compaction(auto=True)
+        return await self._run_compaction(auto=True)
 
-    def _estimate_current_context_tokens(self) -> int:
+    async def _maybe_auto_compact_messages(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+        if not self._auto_compaction or self._is_compacting or not messages:
+            return list(messages)
+
+        context_tokens = self._estimate_current_context_tokens(messages)
+        if not should_compact(
+            context_tokens,
+            self.agent.state.model.context_window,
+            self._compaction_settings,
+        ):
+            return list(messages)
+
+        await self._drain_event_queue()
+        result = await self._run_compaction(auto=True)
+        if result is None:
+            return list(messages)
+
+        compacted_messages = list(self.agent.state.messages)
+        messages[:] = compacted_messages
+        return compacted_messages
+
+    def _estimate_current_context_tokens(self, messages: list[Any] | None = None) -> int:
         latest_compaction_ts = self._latest_compaction_timestamp()
         sanitized_messages: list[Any] = []
-        for message in self.agent.state.messages:
+        for message in messages if messages is not None else self.agent.state.messages:
             if message_role(message) != "assistant":
                 sanitized_messages.append(message)
                 continue
