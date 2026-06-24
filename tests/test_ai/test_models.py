@@ -59,6 +59,39 @@ class TestModelRegistry:
         assert model.api == "openai-completions"
         assert model.input_types == ["text"]
 
+    def test_get_builtin_opencode_go_latest_coding_models(self):
+        kimi = get_model("kimi-k2.7-code", provider="opencode-go")
+        glm = get_model("glm-5.2", provider="opencode-go")
+
+        assert kimi is not None
+        assert kimi.api == "openai-completions"
+        assert kimi.reasoning is True
+        assert kimi.input_types == ["text", "image"]
+        assert kimi.context_window == 262_144
+        assert kimi.max_tokens == 262_144
+        assert kimi.cost.input == 0.95
+        assert kimi.cost.output == 4.0
+        assert kimi.cost.cache_read == 0.19
+        assert kimi.openai_chat_compat is not None
+        assert kimi.openai_chat_compat.thinking_param == "kimi"
+        assert kimi.openai_chat_compat.supports_reasoning_effort is False
+        assert kimi.openai_chat_compat.thinking_tool_choice == ["auto", "none"]
+
+        assert glm is not None
+        assert glm.api == "openai-completions"
+        assert glm.reasoning is True
+        assert glm.input_types == ["text"]
+        assert glm.context_window == 1_000_000
+        assert glm.max_tokens == 131_072
+        assert glm.cost.input == 1.4
+        assert glm.cost.output == 4.4
+        assert glm.cost.cache_read == 0.26
+        assert glm.openai_chat_compat is not None
+        assert glm.openai_chat_compat.thinking_param == "zai"
+        assert glm.openai_chat_compat.supports_reasoning_effort is True
+        assert glm.openai_chat_compat.reasoning_effort_map["xhigh"] == "max"
+        assert glm.openai_chat_compat.reasoning_effort_map["medium"] == "high"
+
     def test_get_builtin_deepseek_v4_models(self):
         flash = get_model("deepseek-v4-flash", provider="deepseek")
         pro = get_model("deepseek-v4-pro", provider="deepseek")

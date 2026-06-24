@@ -56,6 +56,14 @@ _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+_ZAI_GLM_5_2_REASONING_EFFORT_MAP = {
+    "minimal": "none",
+    "low": "high",
+    "medium": "high",
+    "high": "high",
+    "xhigh": "max",
+    "max": "max",
+}
 _DEEPSEEK_V4_REASONING_EFFORT_MAP = {
     "minimal": "high",
     "low": "high",
@@ -283,6 +291,30 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
     ),
     "opencode-go": (
         _model(
+            id="kimi-k2.7-code",
+            name="Kimi K2.7 Code",
+            api="openai-completions",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_BASE_URL,
+            reasoning=True,
+            context_window=262_144,
+            max_tokens=262_144,
+            cost=_cost(input=0.95, output=4.0, cache_read=0.19),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=[
+                    "reasoning_content",
+                    "reasoning",
+                    "reasoning_details",
+                ],
+                supports_reasoning_effort=False,
+                thinking_param="kimi",
+                thinking_default_enabled=True,
+                thinking_tool_choice=["auto", "none"],
+            ),
+        ),
+        _model(
             id="kimi-k2.6",
             name="Kimi K2.6",
             api="openai-completions",
@@ -304,6 +336,27 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
                 thinking_param="kimi",
                 thinking_default_enabled=True,
                 thinking_tool_choice=["auto", "none"],
+            ),
+        ),
+        _model(
+            id="glm-5.2",
+            name="GLM 5.2",
+            api="openai-completions",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_BASE_URL,
+            reasoning=True,
+            input_types=["text"],
+            context_window=1_000_000,
+            max_tokens=131_072,
+            cost=_cost(input=1.4, output=4.4, cache_read=0.26),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=["reasoning_content"],
+                supports_reasoning_effort=True,
+                reasoning_effort_map=_ZAI_GLM_5_2_REASONING_EFFORT_MAP,
+                thinking_param="zai",
+                thinking_default_enabled=True,
             ),
         ),
         _model(
