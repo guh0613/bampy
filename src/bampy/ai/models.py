@@ -72,6 +72,14 @@ _DEEPSEEK_V4_REASONING_EFFORT_MAP = {
     "xhigh": "max",
     "max": "max",
 }
+_KIMI_K3_REASONING_EFFORT_MAP = {
+    "minimal": "max",
+    "low": "max",
+    "medium": "max",
+    "high": "max",
+    "xhigh": "max",
+    "max": "max",
+}
 
 
 BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
@@ -290,6 +298,29 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
     ),
     "opencode-go": (
+        _model(
+            id="kimi-k3",
+            name="Kimi K3",
+            api="openai-completions",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_BASE_URL,
+            reasoning=True,
+            context_window=1_048_576,
+            max_tokens=131_072,
+            cost=_cost(input=3.0, output=15.0, cache_read=0.3),
+            openai_chat_compat=OpenAIChatCompat(
+                max_tokens_field="max_tokens",
+                system_role="system",
+                replay_thinking_field="reasoning_content",
+                stream_reasoning_fields=["reasoning_content"],
+                supports_reasoning_effort=True,
+                supports_store=False,
+                reasoning_effort_map=_KIMI_K3_REASONING_EFFORT_MAP,
+                thinking_param="kimi",
+                thinking_default_enabled=True,
+                thinking_tool_choice=["auto", "none"],
+            ),
+        ),
         _model(
             id="kimi-k2.7-code",
             name="Kimi K2.7 Code",

@@ -896,6 +896,25 @@ class _FakeAsyncIterator:
 
 
 class TestChatCompletionStreaming:
+    def test_build_chat_completion_params_for_kimi_k3_uses_max_effort(self):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        model = get_model("kimi-k3", provider="opencode-go")
+        assert model is not None
+
+        params = _build_chat_completion_params(
+            model,
+            Context(system_prompt="Be precise.", messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="test-key", max_tokens=32, reasoning_effort="low"),
+        )
+
+        assert params["messages"][0]["role"] == "system"
+        assert params["max_tokens"] == 32
+        assert "max_completion_tokens" not in params
+        assert params["reasoning_effort"] == "max"
+        assert params["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert "store" not in params
+
     def test_build_chat_completion_params_for_kimi_uses_compat_fields(self):
         from bampy.ai.providers.openai import _build_chat_completion_params
 

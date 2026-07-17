@@ -55,6 +55,32 @@ class TestModelRegistry:
         assert model.openai_chat_compat.system_role == "system"
         assert model.openai_chat_compat.supports_store is False
 
+    def test_get_builtin_opencode_go_kimi_k3_model(self):
+        model = get_model("kimi-k3", provider="opencode-go")
+
+        assert model is not None
+        assert model.name == "Kimi K3"
+        assert model.api == "openai-completions"
+        assert model.base_url == "https://opencode.ai/zen/go/v1"
+        assert model.reasoning is True
+        assert model.input_types == ["text", "image"]
+        assert model.context_window == 1_048_576
+        assert model.max_tokens == 131_072
+        assert model.cost.input == 3.0
+        assert model.cost.output == 15.0
+        assert model.cost.cache_read == 0.3
+        assert model.openai_chat_compat is not None
+        assert model.openai_chat_compat.max_tokens_field == "max_tokens"
+        assert model.openai_chat_compat.system_role == "system"
+        assert model.openai_chat_compat.replay_thinking_field == "reasoning_content"
+        assert model.openai_chat_compat.stream_reasoning_fields == ["reasoning_content"]
+        assert model.openai_chat_compat.supports_reasoning_effort is True
+        assert model.openai_chat_compat.supports_store is False
+        assert set(model.openai_chat_compat.reasoning_effort_map.values()) == {"max"}
+        assert model.openai_chat_compat.thinking_param == "kimi"
+        assert model.openai_chat_compat.thinking_default_enabled is True
+        assert model.openai_chat_compat.thinking_tool_choice == ["auto", "none"]
+
     def test_get_builtin_opencode_go_glm_model_is_text_only(self):
         model = get_model("glm-5.1", provider="opencode-go")
         assert model is not None
