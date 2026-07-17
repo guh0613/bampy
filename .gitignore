@@ -45,7 +45,7 @@ Thumbs.db
 *.tar.gz
 MANIFEST
 
-# Agent Instructions
-CLAUDE.md
-AGENTS.md
-ARCHITECTURE.md
+# Agent Instructions (repo root only)
+/CLAUDE.md
+/AGENTS.md
+/ARCHITECTURE.md

@@ -2,12 +2,13 @@
 
 模块化、异步优先的 Python LLM Agent 框架。
 
-bampy 提供从底层 LLM API 调用到上层 Agent 应用的完整抽象，采用三层分离架构，支持多提供商、流式事件、工具调用、会话持久化和扩展系统。
+bampy 从底层 LLM 调用到上层 Agent 应用分层设计：多提供商统一类型、流式事件、工具调用、会话持久化与扩展系统均可按需组合。
 
 ## 快速开始
 
 ```bash
 uv add "bampy[anthropic]"   # 或 openai / google / all-providers
+export ANTHROPIC_API_KEY=...
 ```
 
 ```python
@@ -17,22 +18,26 @@ from bampy.ai import get_model
 
 async def main():
     result = await create_agent_session(
-        model=get_model("anthropic", "claude-sonnet-4-20250514"),
+        model=get_model("claude-sonnet-4-5", "anthropic"),
+        tools=[],  # 默认会加载编码工具；最小示例关掉
     )
     session = result.session
-    session.subscribe(lambda e: (
-        print(e.assistant_message_event.delta, end="", flush=True)
-        if e.type == "message_update"
-        and hasattr(e.assistant_message_event, "delta")
-        else None
-    ))
+
+    def on_event(event):
+        if (
+            event.type == "message_update"
+            and event.assistant_message_event.type == "text_delta"
+        ):
+            print(event.assistant_message_event.delta, end="", flush=True)
+
+    session.subscribe(on_event)
     await session.prompt("Hello!")
     await session.close()
 
 asyncio.run(main())
 ```
 
-更多示例 → [快速开始](docs/getting-started.md)
+更多示例见 [快速开始](docs/getting-started.md)。
 
 ## 架构
 
@@ -42,27 +47,27 @@ bampy.agent  — Agent 运行时 · 状态管理 · 工具执行 · 事件系统
 bampy.ai     — 统一 LLM 类型 · 流式事件 · 模型注册 · 提供商适配
 ```
 
-每层均可独立使用，详见 [架构说明](docs/architecture.md)。
+依赖方向：`app → agent → ai`。每层可独立使用，详见 [架构说明](docs/architecture.md)。
 
 ## 文档
 
-| 文档                                     | 说明                           |
-| ---------------------------------------- | ------------------------------ |
-| [快速开始](docs/getting-started.md)      | 安装、配置与示例               |
-| [架构说明](docs/architecture.md)         | 三层架构设计与数据流            |
-| [AgentSession](docs/agent-session.md)    | 应用层编排器（推荐入口）       |
-| [Agent 运行时](docs/agent.md)            | Layer 2 Agent 类与 agent loop  |
-| [AI 层](docs/ai-layer.md)               | LLM 调用、类型系统与流式事件   |
-| [工具](docs/tools.md)                    | 内置工具与自定义工具开发       |
-| [扩展](docs/extensions.md)               | 扩展系统、事件与生命周期       |
-| [会话](docs/session.md)                  | NDJSON 会话持久化与分支        |
-| [Skills](docs/skills.md)                 | Skill 发现与 SKILL.md 格式     |
-| [上下文压缩](docs/compaction.md)         | 长对话自动压缩                 |
-| [提供商](docs/providers.md)              | 内置 LLM 提供商配置            |
-| [自定义提供商](docs/custom-provider.md)  | 添加新的 LLM 提供商            |
+| 文档 | 说明 |
+| ---- | ---- |
+| [快速开始](docs/getting-started.md) | 安装、环境变量与最小示例 |
+| [架构说明](docs/architecture.md) | 三层职责与数据流 |
+| [AgentSession](docs/agent-session.md) | 应用层编排器（推荐入口） |
+| [Agent 运行时](docs/agent.md) | Layer 2 `Agent` 与 agent loop |
+| [AI 层](docs/ai-layer.md) | LLM 调用、类型与流式事件 |
+| [工具](docs/tools.md) | 内置工具与 `@tool` |
+| [扩展](docs/extensions.md) | 扩展系统与生命周期事件 |
+| [会话](docs/session.md) | NDJSON 会话持久化与分支 |
+| [Skills](docs/skills.md) | Skill 发现与 `SKILL.md` |
+| [上下文压缩](docs/compaction.md) | 长对话自动压缩 |
+| [提供商](docs/providers.md) | 内置 LLM 提供商 |
+| [自定义提供商](docs/custom-provider.md) | 注册新的 LLM 提供商 |
 
 ## 要求
 
 - Python >= 3.12
 - 核心依赖：`pydantic >= 2.0`
-- 提供商 SDK 按需安装
+- 提供商 SDK 按需安装（见 [快速开始](docs/getting-started.md)）

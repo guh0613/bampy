@@ -1,36 +1,43 @@
 # 扩展
 
-扩展是导出 `setup(api: ExtensionAPI)` 函数的 Python 模块，用于向 Agent 添加工具、命令和事件处理。
+扩展是导出 `setup(api: ExtensionAPI)` 的 Python 模块，用于注册事件处理、工具和斜杠命令。生命周期由 `ExtensionRunner` 管理，通常经 [AgentSession](agent-session.md) 自动加载。
 
 ## 创建扩展
 
 ```python
 # my_extension.py
-from bampy.app import ExtensionAPI, ToolDefinition
+from bampy.app import ExtensionAPI, ToolDefinition, ToolCallEventResult
+from bampy.agent import AgentToolResult
+from bampy.ai import TextContent
+
 
 def setup(api: ExtensionAPI) -> None:
-    # 订阅事件
     api.on("agent_end", on_agent_end)
     api.on("tool_call", on_tool_call)
 
-    # 注册工具
     api.register_tool(ToolDefinition(
         name="my_tool",
         label="My Tool",
         description="Does something",
-        parameters={"type": "object", "properties": {"input": {"type": "string"}}},
+        parameters={
+            "type": "object",
+            "properties": {"input": {"type": "string"}},
+            "required": ["input"],
+        },
         execute=execute_my_tool,
-        prompt_snippet="Use my_tool when ...",        # 添加到 system prompt
-        prompt_guidelines=["Always validate input"],  # 添加到工具指南
+        prompt_snippet="Use my_tool when ...",
+        prompt_guidelines=["Always validate input"],
     ))
 
-    # 注册命令
-    api.register_command("clear", description="清空会话", handler=handle_clear)
+    api.register_command(
+        "clear",
+        description="清空会话",
+        handler=handle_clear,  # Callable[..., Awaitable[None]]
+    )
 
 
 async def execute_my_tool(tool_call_id, params, cancellation, on_update, ctx):
-    from bampy.agent import AgentToolResult
-    from bampy.ai import TextContent
+    # ctx: ExtensionContext
     return AgentToolResult(content=[TextContent(text="Done")])
 
 
@@ -39,20 +46,29 @@ async def on_agent_end(event, ctx):
 
 
 def on_tool_call(event, ctx):
-    from bampy.app import ToolCallEventResult
     if event.tool_name == "bash" and "rm -rf" in str(event.input):
         return ToolCallEventResult(block=True, reason="Dangerous command")
+
+
+async def handle_clear(*args, **kwargs):
+    ...
 ```
 
-## 放置扩展
+`setup` 可以是同步或异步函数。扩展工具的 `execute` 签名为：
 
-按优先级顺序发现：
+`(tool_call_id, params, cancellation, on_update, ctx) -> AgentToolResult`
 
-1. **显式路径** — `create_agent_session(extension_paths=["./my_ext.py"])`
-2. **显式模块** — `create_agent_session(extension_modules=["my_package.ext"])`
-3. **项目本地** — `<cwd>/.bampy/extensions/*.py`
-4. **用户全局** — `~/.bampy/extensions/*.py`
-5. **entry_points** — pyproject.toml 中注册
+## 发现与加载
+
+### 发现顺序
+
+`create_agent_session` / `load_extensions(discover=True)` 按以下来源收集：
+
+1. **显式路径** — `extension_paths=["./my_ext.py"]`
+2. **项目本地** — `<cwd>/.bampy/extensions/*.py`
+3. **用户全局** — `~/.bampy/extensions/*.py`
+4. **显式模块** — `extension_modules=["my_package.ext"]`
+5. **entry_points** — 组名 `bampy.extensions`
 
 ```toml
 # pyproject.toml
@@ -60,7 +76,38 @@ def on_tool_call(event, ctx):
 my_extension = "my_package.extension"
 ```
 
+路径类扩展先加载，模块类后加载；同名工具/命令按**先注册者优先**。
+
+### API
+
+```python
+from bampy.app import load_extensions, discover_and_load_extensions, create_agent_session
+
+# 底层加载
+result = await load_extensions(
+    paths=["./ext.py"],
+    modules=["my_package.ext"],
+    cwd=".",
+    discover=True,  # 同时扫描本地/全局目录与 entry_points
+)
+# result.extensions / result.errors
+
+# 便捷封装（等价于 paths=extra_paths + discover）
+result = await discover_and_load_extensions(cwd=".", extra_paths=["./ext.py"])
+
+# 会话入口
+await create_agent_session(
+    extension_paths=["./ext.py"],
+    extension_modules=["my_package.ext"],
+    discover_extensions=True,
+)
+```
+
+模块必须提供可调用的 `setup`；缺失时记入 `LoadError`，不中断其他扩展。
+
 ## 事件类型
+
+处理器签名：`(event, ctx: ExtensionContext) -> ...`，可为 sync/async。
 
 ### 会话生命周期
 
@@ -72,38 +119,39 @@ my_extension = "my_package.extension"
 
 ### Agent 生命周期
 
-| 事件 | 触发时机 | 可操作 |
+| 事件 | 触发时机 | 可返回 |
 | ---- | -------- | ------ |
-| `before_agent_start` | Agent 启动前 | 返回 `BeforeAgentStartEventResult` 修改 system prompt |
-| `agent_start` | Agent 循环开始 | - |
-| `agent_end` | Agent 循环结束 | - |
+| `before_agent_start` | Agent 启动前 | `BeforeAgentStartEventResult(system_prompt=...)` |
+| `agent_start` | Agent 循环开始 | — |
+| `agent_end` | Agent 循环结束（含 `messages`） | — |
 
 ### 对话轮与消息
 
-| 事件 | 触发时机 |
-| ---- | -------- |
-| `turn_start` | 对话轮开始 |
-| `turn_end` | 对话轮结束 |
-| `message_start` | 消息开始 |
-| `message_update` | 消息流式更新 |
-| `message_end` | 消息完成 |
+| 事件 | 说明 |
+| ---- | ---- |
+| `turn_start` / `turn_end` | 对话轮起止（`turn_index` 等） |
+| `message_start` / `message_update` / `message_end` | 消息流生命周期 |
 
 ### 工具
 
-| 事件 | 触发时机 | 可操作 |
+| 事件 | 触发时机 | 可返回 |
 | ---- | -------- | ------ |
-| `tool_call` | 工具调用前 | 返回 `ToolCallEventResult(block=True)` 阻止 |
-| `tool_result` | 工具调用后 | 返回 `ToolResultEventResult` 修改结果 |
-| `tool_execution_start` | 工具开始执行 | - |
-| `tool_execution_update` | 工具执行进度 | - |
-| `tool_execution_end` | 工具执行完成 | - |
+| `tool_call` | 工具执行前 | `ToolCallEventResult(block=True, reason=...)` |
+| `tool_result` | 工具执行后 | `ToolResultEventResult`（可改 `content` / `details` / `is_error`） |
+| `tool_execution_start` / `update` / `end` | 执行进度通知 | — |
 
 ### 上下文与输入
 
-| 事件 | 触发时机 | 可操作 |
+| 事件 | 触发时机 | 可返回 |
 | ---- | -------- | ------ |
-| `context` | LLM 调用前 | 返回 `ContextEventResult(messages=[...])` 修改消息 |
-| `input` | 用户输入后 | 返回 `InputEventResult(action="transform"\|"handled")` |
+| `context` | 每次 LLM 调用前 | `ContextEventResult(messages=[...])` |
+| `input` | 用户输入进入 Agent 前 | `InputEventResult(action=...)` |
+
+`InputEventResult.action`：
+
+- `"continue"` — 原样继续（默认）
+- `"transform"` — 用 `text` / `images` 替换输入
+- `"handled"` — 消费输入，不交给 Agent
 
 ## 事件处理示例
 
@@ -114,9 +162,8 @@ from bampy.app import ContextEventResult
 from bampy.ai import UserMessage
 
 def on_context(event, ctx):
-    # 注入额外消息
     return ContextEventResult(
-        messages=[*event.messages, UserMessage(content="[System: be concise]")]
+        messages=[*event.messages, UserMessage(content="[System: be concise]")],
     )
 
 api.on("context", on_context)
@@ -157,86 +204,60 @@ from bampy.app import InputEventResult
 
 def on_input(event, ctx):
     if event.text.startswith("/help"):
-        return InputEventResult(action="handled")  # 完全消费，不传给 Agent
+        return InputEventResult(action="handled")
     if "secret" in event.text:
-        return InputEventResult(action="transform", text=event.text.replace("secret", "***"))
+        return InputEventResult(
+            action="transform",
+            text=event.text.replace("secret", "***"),
+        )
 
 api.on("input", on_input)
 ```
 
-## ExtensionAPI 方法
+## ExtensionAPI
 
-### 事件订阅
+| 方法 | 作用 |
+| ---- | ---- |
+| `on(event, handler)` | 订阅事件 |
+| `register_tool(ToolDefinition)` | 注册 LLM 可调用工具 |
+| `register_command(name, *, description="", handler=...)` | 注册斜杠命令 |
+| `send_message(custom_type, content, *, display=True, details=None, trigger_turn=False)` | 写入自定义消息 |
+| `send_user_message(content)` | 发送用户消息并触发新一轮 |
+| `append_entry(custom_type, data=None)` | 追加自定义会话条目（不发给 LLM） |
 
-```python
-api.on("event_name", handler)
-```
-
-### 工具注册
-
-```python
-api.register_tool(ToolDefinition(
-    name="...",
-    label="...",
-    description="...",
-    parameters=ParamsModel,
-    execute=execute_fn,
-    prompt_snippet="...",           # 可选
-    prompt_guidelines=["..."],      # 可选
-))
-```
-
-### 命令注册
-
-```python
-api.register_command("name", description="...", handler=async_handler)
-```
-
-### 运行时动作
-
-```python
-# 发送自定义消息到会话
-api.send_message("custom_type", "content", display=True, trigger_turn=False)
-
-# 发送用户消息（触发新 Agent 轮）
-api.send_user_message("Follow up question")
-
-# 追加自定义条目到会话（不发送给 LLM）
-api.append_entry("custom_data", {"key": "value"})
-```
+`ToolDefinition` 字段：`name`、`label`、`description`、`parameters`、`execute`，以及可选的 `prompt_snippet`、`prompt_guidelines`（会并入 system prompt 的工具描述与 guidelines）。斜杠命令经 `register_command` 登记后可由 `ExtensionRunner.get_all_commands()` 取出；会话层如何派发由调用方决定。
 
 ## ExtensionContext
 
-事件处理器的第二个参数：
+事件处理器第二个参数：
 
 ```python
 def on_event(event, ctx):
-    ctx.cwd                  # 工作目录
-    ctx.session_manager      # SessionManager
-    ctx.model                # 当前 Model
-    ctx.is_idle()            # Agent 是否空闲
-    ctx.abort()              # 中断 Agent
+    ctx.cwd                 # 工作目录
+    ctx.session_manager     # SessionManager | None
+    ctx.model               # 当前 Model | None
+    ctx.is_idle()           # Agent 是否空闲
+    ctx.abort()             # 中断 Agent
     ctx.has_pending_messages()
     ctx.get_system_prompt()
 ```
 
 ## ExtensionRunner
 
-管理扩展生命周期和事件分发：
-
 ```python
 from bampy.app import ExtensionRunner, load_extensions
+from bampy.app import SessionStartEvent, ToolCallEvent
 
-result = await load_extensions(paths=["./ext.py"], cwd=".")
+loaded = await load_extensions(paths=["./ext.py"], cwd=".", discover=False)
 runner = ExtensionRunner()
-runner.set_extensions(result.extensions)
+runner.set_extensions(loaded.extensions)
 
-# 分发事件
 await runner.emit(SessionStartEvent())
-block = await runner.emit_tool_call(ToolCallEvent(...))
+block = await runner.emit_tool_call(ToolCallEvent(tool_name="bash", input={...}))
 messages = await runner.emit_context(messages)
 
-# 获取所有扩展工具
 tools = runner.get_all_registered_tools()
 commands = runner.get_all_commands()
 ```
+
+`AgentSession` 会把扩展的 `tool_call` / `tool_result` 结果桥接到 Agent 的 `before_tool_call` / `after_tool_call` 钩子；也可与用户传入的钩子叠加。详见 [tools.md](tools.md)、[compaction.md](compaction.md)。

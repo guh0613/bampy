@@ -1,123 +1,163 @@
-# 会话
+# 会话持久化
 
-bampy 使用 NDJSON（每行一个 JSON 对象）的追加写入模式持久化会话，支持树形分支结构。
+bampy 用**追加写入的 NDJSON（JSONL）**保存会话：每个 entry 有 `id` 与 `parent_id`，形成树；**leaf** 指针表示当前分支末端。分支只移动 leaf，不改写历史。
+
+LLM 上下文通过 `SessionManager.build_session_context()`（或模块级 `build_session_context`）沿 root→leaf 解析，并处理 compaction / branch summary。
+
+导入：`from bampy.app import SessionManager, NDJSONBackend, InMemoryBackend, ...`。
 
 ## SessionManager
 
+### 创建与打开
+
 ```python
-from bampy.app import SessionManager, NDJSONBackend, InMemoryBackend
+from bampy.app import SessionManager
 
-# 默认创建（自动生成路径）
-session = SessionManager.create(cwd="/my/project")
+# 新建会话（默认目录 ~/.bampy/sessions/--<cwd-safe>--/）
+sm = SessionManager.create(cwd="/my/project")
 
-# 自定义后端
-session = SessionManager(backend=NDJSONBackend("./session.jsonl"), cwd=".")
+# 打开已有 .jsonl
+sm = SessionManager.open("/path/to/session.jsonl")
 
-# 内存后端（测试用）
-session = SessionManager(backend=InMemoryBackend(), cwd=".")
+# 内存会话（测试 / 临时）
+sm = SessionManager.in_memory(cwd=".")
+
+# 底层构造（一般用上面的工厂方法）
+sm = SessionManager(
+    cwd="/my/project",
+    backend=None,          # persist=True 时懒创建 NDJSONBackend
+    session_dir=None,
+    session_file=None,
+    persist=True,
+)
 ```
+
+属性：`cwd`、`session_id`、`session_file`、`session_dir`、`leaf_id`。
 
 ### 写入
 
 ```python
-from bampy.ai import UserMessage, AssistantMessage
+from bampy.ai import UserMessage
 
-# 追加消息
-session.append_message(UserMessage(content="Hello"))
-
-# 追加模型变更
-session.append_model_change("anthropic", "claude-sonnet-4-20250514")
-
-# 追加推理等级变更
-session.append_thinking_level_change("high")
-
-# 追加压缩记录
-session.append_compaction(summary="...", first_kept_entry_id="m5", tokens_before=50000)
-
-# 追加扩展消息（发送给 LLM）
-session.append_custom_message_entry("my_type", "content", display=True)
-
-# 追加扩展数据（不发送给 LLM）
-session.append_custom_entry("my_data", {"key": "value"})
+sm.append_message(UserMessage(content="Hello"))
+sm.append_model_change("anthropic", "claude-sonnet-4-5")
+sm.append_thinking_level_change("high")
+sm.append_compaction(
+    summary="...",
+    first_kept_entry_id="m5",
+    tokens_before=50000,
+)
+sm.append_custom_message_entry("my_type", "content", display=True)
+sm.append_custom_entry("my_data", {"key": "value"})
+sm.append_session_info("我的会话")
+sm.append_label_change("entry_id", "checkpoint")
+sm.append_branch_summary(from_id="m3", summary="偏离说明")
 ```
 
-### 读取
+持久化策略：在出现**第一条 assistant 消息之前**不会真正写盘；之后先整文件 `rewrite`，再对新 entry `append`。
+
+### 读取与树
 
 ```python
-# 构建当前分支的上下文
-context = session.build_session_context()
-context.messages          # list[AgentMessage]
-context.thinking_level    # str
-context.model             # dict | None
+context = sm.build_session_context()
+context.messages         # 解析后的消息列表
+context.thinking_level   # str，默认 "off"
+context.model            # {"provider", "model_id"} | None
 
-# 获取当前分支条目
-entries = session.get_branch()
+sm.get_branch()          # 当前 leaf 到 root 的路径（root→leaf）
+sm.get_tree()            # list[SessionTreeNode]
+sm.get_entries()
+sm.get_entry(entry_id)
+sm.get_leaf_entry()
+sm.get_header()
+sm.get_label(entry_id)
+sm.get_session_name()
 ```
 
 ### 分支
 
 ```python
-# 从某个条目创建新分支
-session.branch(branch_from_id="entry_id")
+sm.branch(branch_from_id="entry_id")          # 将 leaf 移到该 entry
+sm.reset_leaf()                               # leaf = None
+sm.branch_with_summary("entry_id", "摘要...")  # branch + append_branch_summary
+```
+
+### 列出会话
+
+```python
+sessions = await SessionManager.list_sessions(cwd="/my/project")
+# list[SessionInfo]: path, id, cwd, name, created, modified, message_count, ...
 ```
 
 ## 条目类型
 
-NDJSON 文件中每行是一个条目，通过 `parent_id` 构成树形结构：
+| 类 | `type` | 说明 |
+| -- | ------ | ---- |
+| `SessionHeader` | `session` | 文件头：`version`、`id`、`timestamp`、`cwd`、`parent_session` |
+| `SessionMessageEntry` | `message` | LLM 消息（`message` dict） |
+| `ModelChangeEntry` | `model_change` | `provider`、`model_id` |
+| `ThinkingLevelChangeEntry` | `thinking_level_change` | `thinking_level` |
+| `CompactionEntry` | `compaction` | `summary`、`first_kept_entry_id`、`tokens_before`、`details`、`from_hook` |
+| `BranchSummaryEntry` | `branch_summary` | `from_id`、`summary`、`details`、`from_hook` |
+| `CustomEntry` | `custom` | 扩展数据，**不进** LLM |
+| `CustomMessageEntry` | `custom_message` | 扩展消息，**可进** LLM |
+| `LabelEntry` | `label` | `target_id`、`label` |
+| `SessionInfoEntry` | `session_info` | `name` |
 
-| 类型 | 说明 |
-| ---- | ---- |
-| `SessionHeader` | 会话头，包含版本号 |
-| `SessionMessageEntry` | 标准 LLM 消息（user/assistant/tool_result） |
-| `ModelChangeEntry` | 模型切换记录 |
-| `ThinkingLevelChangeEntry` | 推理等级变更记录 |
-| `CompactionEntry` | 压缩摘要 + 保留起点 |
-| `BranchSummaryEntry` | 分支偏离摘要 |
-| `CustomEntry` | 扩展数据（不发送给 LLM） |
-| `CustomMessageEntry` | 扩展消息（发送给 LLM） |
-| `LabelEntry` | 条目标签 |
-| `SessionInfoEntry` | 会话元数据 |
+公共基类字段（header 除外）：`id`、`parent_id`、`timestamp`。
 
-## NDJSON 格式示例
+联合类型别名：`SessionEntry`。上下文结果：`SessionContext`；树节点：`SessionTreeNode`；列表项：`SessionInfo`。
+
+## NDJSON 示例
 
 ```jsonl
-{"type":"session","id":"abc","version":1,"timestamp":"2024-01-01T00:00:00Z"}
-{"type":"message","id":"m1","parent_id":null,"message":{"role":"user","content":"Hello"}}
-{"type":"message","id":"m2","parent_id":"m1","message":{"role":"assistant","content":[...]}}
-{"type":"model_change","id":"mc1","parent_id":"m2","provider":"openai","model_id":"gpt-5.5"}
-{"type":"compaction","id":"c1","parent_id":"mc1","summary":"...","first_kept_entry_id":"m5"}
+{"type":"session","version":1,"id":"abc","timestamp":"2024-01-01T00:00:00+00:00","cwd":"/my/project","parent_session":null}
+{"type":"message","id":"m1","parent_id":null,"timestamp":"...","message":{"role":"user","content":"Hello"}}
+{"type":"message","id":"m2","parent_id":"m1","timestamp":"...","message":{"role":"assistant","content":[...]}}
+{"type":"model_change","id":"mc1","parent_id":"m2","timestamp":"...","provider":"openai","model_id":"gpt-5.4-mini"}
+{"type":"compaction","id":"c1","parent_id":"mc1","timestamp":"...","summary":"...","first_kept_entry_id":"m5","tokens_before":50000,"details":null,"from_hook":false}
 ```
+
+当前版本常量：`CURRENT_SESSION_VERSION = 1`。
 
 ## 自定义后端
 
-实现 `SessionBackend` 协议即可替换存储：
+实现同步协议 `SessionBackend`：
 
 ```python
-from bampy.app import SessionBackend
+from bampy.app import SessionBackend  # Protocol
 
-class SQLiteBackend:
-    async def append(self, entry: dict) -> None:
-        ...
-
-    async def read_all(self) -> list[dict]:
-        ...
-
-    async def rewrite(self, entries: list[dict]) -> None:
-        ...  # 用于压缩后重写
+class MyBackend:
+    def append(self, entry: dict) -> None: ...
+    def read_all(self) -> list[dict]: ...
+    def rewrite(self, entries: list[dict]) -> None: ...
 ```
 
-## 应用消息类型
+内置：
 
-app 层定义了几种特殊消息类型，通过消息转换器注册后可参与 LLM 对话：
+- `NDJSONBackend(path)` — 文件追加
+- `InMemoryBackend()` — 内存列表
+
+传入方式：`SessionManager(cwd, backend=MyBackend(), persist=True)`，或 `in_memory()`。
+
+## 应用层消息类型
+
+压缩 / 分支摘要等会以自定义消息角色进入 agent 消息列表，需注册转换器后才能送给 LLM：
 
 ```python
 from bampy.app import (
-    CompactionSummaryMessage,  # 压缩摘要
-    BranchSummaryMessage,      # 分支摘要
-    CustomMessage,             # 扩展自定义消息
+    CompactionSummaryMessage,
+    BranchSummaryMessage,
+    CustomMessage,
     register_app_message_converters,
+    create_compaction_summary_message,
+    create_branch_summary_message,
+    create_custom_message,
+    convert_app_messages_to_llm,
 )
 
-# AgentSession 初始化时自动调用
+# AgentSession 初始化时会自动调用
 register_app_message_converters()
 ```
+
+与 [AgentSession](agent-session.md) 配合时，消息会在 agent 事件流中自动 `append_message` 到 `SessionManager`。更多压缩行为见 [compaction.md](compaction.md)。
