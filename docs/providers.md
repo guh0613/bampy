@@ -254,7 +254,7 @@ model = get_model("kimi-k3", provider="opencode-go")
 | `glm-5.2` | GLM 5.2 | text | 1M / 131K |
 | `glm-5.1` | GLM 5.1 | text | 198K / 65K |
 
-均通过 `OpenAIChatCompat` 处理 thinking / `reasoning_content` 等差异。例如 `kimi-k3` 默认开启 thinking，且 effort 映射到后端的 `max`；`glm-5.2` 有独立的 effort 映射表。需向网关传入有效 `api_key`。
+均通过 `OpenAIChatCompat` 处理 thinking / `reasoning_content` 等差异。例如 `kimi-k3` 默认开启 thinking，并支持后端的 `low` / `high` / `max` 三档 effort（`minimal`/`low` → `low`，`medium`/`high` → `high`，`xhigh`/`max` → `max`）；`glm-5.2` 有独立的 effort 映射表。需向网关传入有效 `api_key`。
 
 ---
 

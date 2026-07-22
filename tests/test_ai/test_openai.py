@@ -896,7 +896,22 @@ class _FakeAsyncIterator:
 
 
 class TestChatCompletionStreaming:
-    def test_build_chat_completion_params_for_kimi_k3_uses_max_effort(self):
+    @pytest.mark.parametrize(
+        ("requested_effort", "backend_effort"),
+        [
+            ("minimal", "low"),
+            ("low", "low"),
+            ("medium", "high"),
+            ("high", "high"),
+            ("xhigh", "max"),
+            ("max", "max"),
+        ],
+    )
+    def test_build_chat_completion_params_for_kimi_k3_maps_effort(
+        self,
+        requested_effort: str,
+        backend_effort: str,
+    ):
         from bampy.ai.providers.openai import _build_chat_completion_params
 
         model = get_model("kimi-k3", provider="opencode-go")
@@ -905,13 +920,17 @@ class TestChatCompletionStreaming:
         params = _build_chat_completion_params(
             model,
             Context(system_prompt="Be precise.", messages=[UserMessage(content="Hello")]),
-            OpenAIOptions(api_key="test-key", max_tokens=32, reasoning_effort="low"),
+            OpenAIOptions(
+                api_key="test-key",
+                max_tokens=32,
+                reasoning_effort=requested_effort,
+            ),
         )
 
         assert params["messages"][0]["role"] == "system"
         assert params["max_tokens"] == 32
         assert "max_completion_tokens" not in params
-        assert params["reasoning_effort"] == "max"
+        assert params["reasoning_effort"] == backend_effort
         assert params["extra_body"] == {"thinking": {"type": "enabled"}}
         assert "store" not in params
 

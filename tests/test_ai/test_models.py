@@ -76,7 +76,14 @@ class TestModelRegistry:
         assert model.openai_chat_compat.stream_reasoning_fields == ["reasoning_content"]
         assert model.openai_chat_compat.supports_reasoning_effort is True
         assert model.openai_chat_compat.supports_store is False
-        assert set(model.openai_chat_compat.reasoning_effort_map.values()) == {"max"}
+        assert model.openai_chat_compat.reasoning_effort_map == {
+            "minimal": "low",
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max",
+            "max": "max",
+        }
         assert model.openai_chat_compat.thinking_param == "kimi"
         assert model.openai_chat_compat.thinking_default_enabled is True
         assert model.openai_chat_compat.thinking_tool_choice == ["auto", "none"]

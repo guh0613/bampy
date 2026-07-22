@@ -73,10 +73,10 @@ _DEEPSEEK_V4_REASONING_EFFORT_MAP = {
     "max": "max",
 }
 _KIMI_K3_REASONING_EFFORT_MAP = {
-    "minimal": "max",
-    "low": "max",
-    "medium": "max",
-    "high": "max",
+    "minimal": "low",
+    "low": "low",
+    "medium": "high",
+    "high": "high",
     "xhigh": "max",
     "max": "max",
 }
