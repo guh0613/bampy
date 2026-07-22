@@ -138,6 +138,7 @@ from .compaction import (
     CompactionResult,
     DEFAULT_COMPACTION_SETTINGS,
     estimate_tokens,
+    estimate_text_tokens,
     estimate_context_tokens,
     should_compact,
     prepare_compaction,

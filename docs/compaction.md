@@ -31,7 +31,7 @@ settings.enabled
 且 context_tokens > context_window - reserve_tokens
 ```
 
-`context_tokens` 优先取最近一条有效 assistant `usage`，再加上其后消息的启发式估算（约 `chars / 4`）。
+`context_tokens` 优先取最近一条有效 assistant `usage`，再加上其后消息的本地启发式估算。普通 ASCII 文本按约 `chars / 4` 计算，非 ASCII 文本按约一字符一个 token 计算；工具调用会计算名称和 JSON 参数，图片使用固定估算值。
 
 ### 会话事件
 
@@ -77,6 +77,7 @@ if result is not None:
 ```python
 from bampy.app import (
     CompactionSettings,
+    estimate_text_tokens,
     estimate_tokens,
     estimate_context_tokens,
     should_compact,
@@ -85,7 +86,8 @@ from bampy.app import (
     generate_summary,
 )
 
-# 单条消息启发式 token
+# 文本与单条消息的本地启发式 token
+text_tokens = estimate_text_tokens(text)
 tokens = estimate_tokens(message)
 
 # 上下文估算（usage + trailing）
@@ -106,7 +108,8 @@ if should_compact(estimate.tokens, model.context_window, CompactionSettings()):
 | 符号 | 作用 |
 | ---- | ---- |
 | `CompactionSettings` | `enabled` / `reserve_tokens` / `keep_recent_tokens` |
-| `estimate_tokens` | 单消息 chars/4 估算 |
+| `estimate_text_tokens` | 区分 ASCII 与非 ASCII 的纯文本估算 |
+| `estimate_tokens` | 包含工具调用和图片的单消息估算 |
 | `estimate_context_tokens` | 返回 `ContextUsageEstimate` |
 | `should_compact` | 阈值判断 |
 | `prepare_compaction` | 从当前分支 `SessionEntry` 计算切点与待摘要消息 |

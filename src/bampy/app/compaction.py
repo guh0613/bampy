@@ -6,6 +6,7 @@ after compaction the session is reloaded.
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,86 +46,93 @@ DEFAULT_COMPACTION_SETTINGS = CompactionSettings()
 # Token estimation
 # ---------------------------------------------------------------------------
 
+_IMAGE_TOKEN_ESTIMATE = 1_200
+
+def estimate_text_tokens(text: str) -> int:
+    """Estimate text tokens as ASCII chars/4 plus one per non-ASCII char."""
+    if not text:
+        return 0
+    ascii_chars = sum(ord(char) < 128 for char in text)
+    non_ascii_chars = len(text) - ascii_chars
+    return math.ceil(ascii_chars / 4 + non_ascii_chars)
+
+
+def _get_value(value: Any, name: str, default: Any = None) -> Any:
+    return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
+
+
+def _estimate_serialized_tokens(value: Any) -> int:
+    try:
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        serialized = str(value)
+    return estimate_text_tokens(serialized)
+
+
+def _estimate_content(content: Any) -> int:
+    if isinstance(content, str):
+        return estimate_text_tokens(content)
+    if not isinstance(content, list):
+        return _estimate_serialized_tokens(content) if content is not None else 0
+
+    tokens = 0
+    for block in content:
+        block_type = _get_value(block, "type", "")
+        if block_type == "image":
+            tokens += _IMAGE_TOKEN_ESTIMATE
+            continue
+
+        text = _get_value(block, "text")
+        if text:
+            tokens += estimate_text_tokens(str(text))
+        thinking = _get_value(block, "thinking")
+        if thinking:
+            tokens += estimate_text_tokens(str(thinking))
+    return tokens
+
+
 def estimate_tokens(message: Any) -> int:
-    """Estimate token count using a chars/4 heuristic (conservative)."""
-    chars = 0
-    role = getattr(message, "role", None)
-    image_token_cost = 4800
+    """Estimate the provider-agnostic tokens contributed by one message."""
+    role = _get_value(message, "role")
 
     if role in ("user", "custom"):
-        content = getattr(message, "content", "")
-        if isinstance(content, str):
-            chars = len(content)
-        elif isinstance(content, list):
-            for block in content:
-                text = getattr(block, "text", None)
-                if text is None and isinstance(block, dict):
-                    text = block.get("text")
-                if text:
-                    chars += len(text)
-                block_type = getattr(block, "type", None)
-                if block_type is None and isinstance(block, dict):
-                    block_type = block.get("type")
-                if block_type == "image":
-                    chars += image_token_cost
-        return math.ceil(chars / 4)
+        return _estimate_content(_get_value(message, "content", ""))
 
     if role == "assistant":
-        content = getattr(message, "content", [])
+        tokens = 0
+        content = _get_value(message, "content", [])
         if isinstance(content, list):
             for block in content:
-                if hasattr(block, "text"):
-                    chars += len(block.text)
-                elif hasattr(block, "thinking"):
-                    chars += len(block.thinking)
-                elif hasattr(block, "name"):
-                    import json
-                    chars += len(getattr(block, "name", ""))
-                    args = getattr(block, "arguments", {})
-                    chars += len(json.dumps(args) if isinstance(args, dict) else str(args))
-                elif isinstance(block, dict):
-                    chars += len(block.get("text", ""))
-                    chars += len(block.get("thinking", ""))
-                    if "name" in block:
-                        import json
-                        chars += len(block.get("name", ""))
-                        chars += len(json.dumps(block.get("arguments", {})))
-        return math.ceil(chars / 4)
-
-    if role == "tool_result":
-        content = getattr(message, "content", [])
-        if isinstance(content, str):
-            chars = len(content)
-        elif isinstance(content, list):
-            for block in content:
-                text = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
+                block_type = _get_value(block, "type", "")
+                if block_type in ("tool_call", "toolCall") or _get_value(block, "name") is not None:
+                    tokens += estimate_text_tokens(str(_get_value(block, "name", "")))
+                    tokens += _estimate_serialized_tokens(_get_value(block, "arguments", {}))
+                    continue
+                text = _get_value(block, "text")
                 if text:
-                    chars += len(text)
-                if (getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else "")) == "image":
-                    chars += image_token_cost
-        return math.ceil(chars / 4)
+                    tokens += estimate_text_tokens(str(text))
+                thinking = _get_value(block, "thinking")
+                if thinking:
+                    tokens += estimate_text_tokens(str(thinking))
+        elif isinstance(content, str):
+            tokens += estimate_text_tokens(content)
+        return tokens
+
+    if role in ("tool_result", "toolResult"):
+        return _estimate_content(_get_value(message, "content", []))
 
     if role in ("compaction_summary", "branch_summary"):
-        summary = getattr(message, "summary", "")
-        return math.ceil(len(summary) / 4)
+        return estimate_text_tokens(str(_get_value(message, "summary", "")))
 
     # dict-based messages (from session)
     if isinstance(message, dict):
-        content = message.get("content", "")
-        if isinstance(content, str):
-            chars = len(content)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    chars += len(block.get("text", ""))
-                    chars += len(block.get("thinking", ""))
-                    if "name" in block:
-                        import json
-                        chars += len(block.get("name", ""))
-                        chars += len(json.dumps(block.get("arguments", {})))
-                    if block.get("type") == "image":
-                        chars += image_token_cost
-        return math.ceil(chars / 4)
+        return _estimate_content(message.get("content", ""))
 
     return 0
 

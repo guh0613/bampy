@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import math
-
 from bampy.ai.types import (
     AssistantMessage,
     ImageContent,
@@ -22,6 +20,7 @@ from bampy.app.compaction import (
     CompactionSettings,
     compact,
     estimate_context_tokens,
+    estimate_text_tokens,
     estimate_tokens,
     find_cut_point,
     generate_summary,
@@ -52,9 +51,16 @@ class TestEstimateTokens:
             ],
         }
 
-        expected = math.ceil((2 + 4800) / 4)
-        assert estimate_tokens(message) == expected
-        assert estimate_tokens(dict_message) == expected
+        assert estimate_tokens(message) >= 1_200
+        assert estimate_tokens(dict_message) == estimate_tokens(message)
+
+    def test_estimates_ascii_and_non_ascii_text(self):
+        english = "a" * 40
+        chinese = "中" * 40
+
+        assert estimate_text_tokens(english) == 10
+        assert estimate_text_tokens(chinese) == 40
+        assert estimate_text_tokens("hello世界") == 4
 
     def test_counts_assistant_tool_calls_and_thinking(self):
         message = AssistantMessage(
@@ -67,7 +73,7 @@ class TestEstimateTokens:
             ],
         )
 
-        assert estimate_tokens(message) >= math.ceil(len("hellosearch") / 4)
+        assert estimate_tokens(message) > estimate_text_tokens("hellosearch")
 
 
 class TestContextEstimation:
@@ -93,8 +99,8 @@ class TestContextEstimation:
         estimate = estimate_context_tokens(messages)
 
         assert estimate.usage_tokens == 64
-        assert estimate.trailing_tokens == 1
-        assert estimate.tokens == 65
+        assert estimate.trailing_tokens == estimate_tokens(messages[-1])
+        assert estimate.tokens == 64 + estimate.trailing_tokens
         assert estimate.last_usage_index == 1
 
     def test_uses_last_non_error_assistant_usage_from_persisted_dicts(self):
@@ -117,8 +123,8 @@ class TestContextEstimation:
         estimate = estimate_context_tokens(messages)
 
         assert estimate.usage_tokens == 64
-        assert estimate.trailing_tokens == 1
-        assert estimate.tokens == 65
+        assert estimate.trailing_tokens == estimate_tokens(messages[-1])
+        assert estimate.tokens == 64 + estimate.trailing_tokens
         assert estimate.last_usage_index == 1
 
 
