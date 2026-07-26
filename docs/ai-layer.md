@@ -222,7 +222,7 @@ model = get_model("claude-sonnet-4-5")  # 跨提供商按注册顺序取第一�
 
 # 错误（旧文档常见写法）：get_model("anthropic", "claude-...")
 
-get_providers()                 # ['anthropic', 'google', 'ollama', ...]
+get_providers()                 # ['anthropic', 'google', 'opencode-go', 'ollama', ...]
 get_models("openai")            # 某提供商下全部 Model
 models_are_equal(a, b)          # 比较 id + provider
 supports_xhigh(model)           # 部分 GPT / Claude Opus 4.7 家族
@@ -254,7 +254,7 @@ supports_xhigh(model)           # 部分 GPT / Claude Opus 4.7 家族
 register_model(Model(
     id="my-model",
     name="My Model",
-    api="openai-completions",  # 或 openai-responses / anthropic-messages / google-genai / ollama-responses
+    api="openai-completions",  # 或 openai-responses / anthropic-messages / google-genai
     provider="custom",
     base_url="https://my-api.example.com/v1",
     input_types=["text"],
@@ -300,9 +300,8 @@ stream(model, ctx, GeminiOptions(thinking_level="medium"))
 | `Model.api` | 适配模块 |
 | ----------- | -------- |
 | `anthropic-messages` | `providers.anthropic` |
-| `openai-responses` | `providers.openai` |
-| `openai-completions` | `providers.openai`（Chat Completions） |
-| `ollama-responses` | `providers.ollama` |
+| `openai-responses` | `providers.openai`（Responses；Ollama v0.13.3+ 可复用） |
+| `openai-completions` | `providers.openai`（Chat Completions；Ollama 默认建议） |
 | `google-genai` | `providers.gemini` |
 
 也可显式调用 `register_builtin_providers()` / `ensure_builtin_providers_registered()`。

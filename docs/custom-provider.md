@@ -2,7 +2,7 @@
 
 两种扩展路径：
 
-1. **只换端点 / 模型**：`register_model(...)`，把 `api` 设为已有值（`openai-responses`、`openai-completions`、`anthropic-messages`、`google-genai`、`ollama-responses`）。见 [providers.md](providers.md)。
+1. **只换端点 / 模型**：`register_model(...)`，把 `api` 设为已有值（`openai-responses`、`openai-completions`、`anthropic-messages`、`google-genai`）。见 [providers.md](providers.md)。
 2. **全新协议**：实现 `stream` / `stream_simple`，用 `register_api_provider` 挂到新的 `Model.api`，再 `register_model`。
 
 下文描述第 2 种。

@@ -6,7 +6,7 @@
 
 ```bash
 uv add "bampy[anthropic]"       # Anthropic SDK
-uv add "bampy[openai]"          # OpenAI SDK（OpenAI / DeepSeek / OpenCode Go / Ollama 适配均依赖它）
+uv add "bampy[openai]"          # OpenAI SDK（OpenAI 及兼容端点均依赖它）
 uv add "bampy[google]"          # google-genai
 uv add "bampy[all-providers]"   # anthropic + openai + google-genai
 ```
@@ -28,10 +28,11 @@ SimpleStreamOptions(api_key="...")
 | 逻辑提供商 / SDK | 常见环境变量 |
 | ---------------- | ------------ |
 | Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI（及走 OpenAI SDK 的 Completions / Ollama 适配） | `OPENAI_API_KEY` |
+| OpenAI（及走 OpenAI SDK 的兼容端点） | `OPENAI_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY` 或 `GOOGLE_API_KEY` |
 | DeepSeek | 通常传 `api_key=`；也可按网关约定配置 OpenAI SDK 可读的 key |
 | OpenCode Go | 通过 `api_key=` 注入网关密钥 |
+| Ollama Cloud | `OLLAMA_API_KEY`；读取后通过 `api_key=` 传入 |
 
 上层 `Agent` / `create_agent_session` 还可用 `get_api_key(provider)` 按 `Model.provider` 动态解析。
 
@@ -47,7 +48,7 @@ model = get_model("claude-opus-4-7", provider="anthropic")
 model = get_model("gpt-5.4-mini", "openai")
 
 get_providers()
-# ['anthropic', 'google', 'ollama', 'opencode-go', 'deepseek', 'openai']
+# ['anthropic', 'google', 'opencode-go', 'ollama', 'deepseek', 'openai']
 
 [m.id for m in get_models("deepseek")]
 ```
@@ -258,37 +259,40 @@ model = get_model("kimi-k3", provider="opencode-go")
 
 ---
 
-## Ollama
+## Ollama Cloud
 
-- **依赖**：`bampy[openai]`（OpenAI 兼容 Responses 客户端）
-- **API**：`ollama-responses`
+- **依赖**：`bampy[openai]`
+- **API**：`openai-completions`（复用通用 Chat Completions adapter）
 - **provider**：`ollama`
-
-针对可能产生重叠 text delta 的网关做了归一化，与标准 `openai-responses` 适配分离。
+- **base_url**：`https://ollama.com/v1`
+- **认证**：真实 Ollama Cloud API key
 
 ```python
-from bampy.ai import get_model, register_model, Model, ModelCost
+import os
 
-model = get_model("gemini-3-flash", provider="ollama")
-# 内置条目未设 base_url；本地或远端需 register_model 覆盖，例如：
-register_model(Model(
-    id="gemini-3-flash",
-    name="Gemini 3 Flash",
-    api="ollama-responses",
-    provider="ollama",
-    base_url="http://127.0.0.1:11434/v1",
-    reasoning=True,
-    context_window=1_048_576,
-    max_tokens=65_536,
-    cost=ModelCost(input=0.50, output=3.0, cache_read=0.05),
-))
+from bampy.ai import SimpleStreamOptions, get_model
+
+model = get_model("glm-5.2", provider="ollama")
+options = SimpleStreamOptions(
+    api_key=os.environ["OLLAMA_API_KEY"],
+    reasoning="high",
+)
 ```
 
-| 模型 ID | 名称 |
-| ------- | ---- |
-| `gemini-3-flash` | Gemini 3 Flash |
+| 直接 Cloud 模型 ID | 名称 | input_types | context / max_tokens |
+| ------------------ | ---- | ----------- | -------------------- |
+| `glm-5.2` | GLM 5.2 | text | 1M / 131K |
+| `kimi-k2.7-code` | Kimi K2.7 Code | text+image | 262K / 32K |
 
-选项类型与 OpenAI Responses 相同（`OpenAIOptions` / `SimpleStreamOptions`）。
+这些是 `https://ollama.com/v1` 使用的直接 Cloud ID，不带 `:cloud`。`glm-5.2:cloud`、`kimi-k2.7-code:cloud` 是通过本地 Ollama 转发到 Cloud 时使用的 tag。
+
+两个内置模型都通过 `OpenAIChatCompat` 使用 `system` role、`max_tokens` 和 Ollama 的 `reasoning` 字段进行 thinking 流式解析与历史回传，并禁用 `store`。GLM 5.2 的公开档位是 `high` / `max`，因此较低级别会映射到 `none` 或 `high`；Kimi K2.7 Code 使用 Ollama 通用的 `low` / `medium` / `high` / `max` 档位。
+
+Ollama Cloud 按订阅额度和 GPU 使用量计费，而非公布固定的每 token 单价，因此内置 `ModelCost` 保持为零。Cloud 模型会变更或退休，当前可用 ID 应以 `https://ollama.com/v1/models` 或 `https://ollama.com/api/tags` 为准。
+
+Ollama Chat Completions 不支持 `tool_choice`，也不应启用 prompt cache、service tier 等 OpenAI 专有选项。Ollama 也提供 stateless `/v1/responses`；若明确要求 Responses 事件协议，可将自定义模型设为 `api="openai-responses"`，但它不支持 `previous_response_id` / `conversation`，且当前对截断结束原因的表达不如 Chat Completions 完整。
+
+本地 Ollama 模型仍可注册为 `openai-completions` 自定义模型，使用 `http://127.0.0.1:11434/v1` 和任意非空 key。API 能力以 [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility) 为准；Cloud 认证见 [Ollama Cloud](https://docs.ollama.com/cloud)。
 
 ---
 
@@ -341,8 +345,8 @@ register_model(Model(
 ))
 ```
 
-- Responses 兼容：`api="openai-responses"`
-- 仅 `/v1/chat/completions`：`api="openai-completions"`
-- Anthropic / Gemini / Ollama：使用对应 `api` 名
+- Responses 兼容（Ollama v0.13.3+ 可选）：`api="openai-responses"`
+- `/v1/chat/completions`（Ollama 默认建议）：`api="openai-completions"`
+- Anthropic / Gemini：使用对应 `api` 名
 
 全新协议适配见 [custom-provider.md](custom-provider.md)。类型与流式协议见 [ai-layer.md](ai-layer.md)。

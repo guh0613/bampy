@@ -30,14 +30,6 @@ class TestModelRegistry:
         assert model is not None
         assert model.api == "openai-responses"
 
-    def test_get_builtin_ollama_model(self):
-        model = get_model("gemini-3-flash", provider="ollama")
-        assert model is not None
-        assert model.api == "ollama-responses"
-        assert model.reasoning is True
-        assert model.context_window == 1_048_576
-        assert model.max_tokens == 65_536
-
     def test_get_builtin_opencode_go_kimi_model(self):
         model = get_model("kimi-k2.6", provider="opencode-go")
         assert model is not None
@@ -134,6 +126,47 @@ class TestModelRegistry:
         assert glm.openai_chat_compat.reasoning_effort_map["xhigh"] == "max"
         assert glm.openai_chat_compat.reasoning_effort_map["medium"] == "high"
 
+    def test_get_builtin_ollama_cloud_models(self):
+        glm = get_model("glm-5.2", provider="ollama")
+        kimi = get_model("kimi-k2.7-code", provider="ollama")
+
+        assert glm is not None
+        assert glm.name == "GLM 5.2 (Ollama Cloud)"
+        assert glm.api == "openai-completions"
+        assert glm.base_url == "https://ollama.com/v1"
+        assert glm.reasoning is True
+        assert glm.input_types == ["text"]
+        assert glm.context_window == 1_000_000
+        assert glm.max_tokens == 131_072
+        assert glm.cost.input == 0.0
+        assert glm.cost.output == 0.0
+        assert glm.openai_chat_compat is not None
+        assert glm.openai_chat_compat.max_tokens_field == "max_tokens"
+        assert glm.openai_chat_compat.system_role == "system"
+        assert glm.openai_chat_compat.replay_thinking_field == "reasoning"
+        assert glm.openai_chat_compat.stream_reasoning_fields == ["reasoning"]
+        assert glm.openai_chat_compat.supports_store is False
+        assert glm.openai_chat_compat.reasoning_effort_map["medium"] == "high"
+        assert glm.openai_chat_compat.reasoning_effort_map["max"] == "max"
+
+        assert kimi is not None
+        assert kimi.name == "Kimi K2.7 Code (Ollama Cloud)"
+        assert kimi.api == "openai-completions"
+        assert kimi.base_url == "https://ollama.com/v1"
+        assert kimi.reasoning is True
+        assert kimi.input_types == ["text", "image"]
+        assert kimi.context_window == 262_144
+        assert kimi.max_tokens == 32_768
+        assert kimi.openai_chat_compat is not None
+        assert kimi.openai_chat_compat.replay_thinking_field == "reasoning"
+        assert kimi.openai_chat_compat.reasoning_effort_map["minimal"] == "low"
+        assert kimi.openai_chat_compat.reasoning_effort_map["xhigh"] == "max"
+
+        # Keep the existing unscoped lookup stable for duplicated model IDs.
+        unscoped = get_model("glm-5.2")
+        assert unscoped is not None
+        assert unscoped.provider == "opencode-go"
+
     def test_get_builtin_deepseek_v4_models(self):
         flash = get_model("deepseek-v4-flash", provider="deepseek")
         pro = get_model("deepseek-v4-pro", provider="deepseek")
@@ -203,8 +236,8 @@ class TestModelRegistry:
         assert "anthropic" in providers
         assert "openai" in providers
         assert "google" in providers
-        assert "ollama" in providers
         assert "deepseek" in providers
+        assert "ollama" in providers
 
     def test_register_custom_model(self):
         custom = Model(

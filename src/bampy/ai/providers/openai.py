@@ -362,12 +362,14 @@ def _chat_replay_payloads(
 
 def _normalize_reasoning_effort(model: Model, effort: str | None) -> str | None:
     """Normalize a public reasoning effort to the target backend's vocabulary."""
-    if effort is None or effort == "none":
+    if effort is None:
         return None
 
     compat = model.openai_chat_compat
-    if compat and compat.reasoning_effort_map:
-        return compat.reasoning_effort_map.get(effort, effort)
+    if compat and effort in compat.reasoning_effort_map:
+        return compat.reasoning_effort_map[effort]
+    if effort == "none":
+        return None
 
     if effort == "max":
         return "xhigh" if supports_xhigh(model) else "high"
@@ -893,15 +895,22 @@ def stream_openai(
 
             output_to_content: dict[int, int] = {}
             tool_json_bufs: dict[int, str] = {}
+            saw_terminal_event = False
 
             response = await client.responses.create(**params)
             async for event in response:
-                _handle_stream_event(
+                if _handle_stream_event(
                     event,
                     output,
                     event_stream,
                     output_to_content,
                     tool_json_bufs,
+                ):
+                    saw_terminal_event = True
+
+            if not saw_terminal_event:
+                raise RuntimeError(
+                    "Responses stream ended without a terminal event."
                 )
 
             output.usage.cost = calculate_cost(model, output.usage)
@@ -960,15 +969,15 @@ def _handle_stream_event(
     stream: AssistantMessageEventStream,
     output_to_content: dict[int, int],
     tool_json_bufs: dict[int, str],
-) -> None:
-    """Map a single Responses API SSE event to bampy events."""
+) -> bool:
+    """Map one Responses SSE event and report whether it terminated the stream."""
     etype = getattr(event, "type", "")
 
     if etype == "response.output_item.added":
         item = getattr(event, "item", None)
         out_idx = getattr(event, "output_index", 0)
         if item is None:
-            return
+            return False
 
         item_type = getattr(item, "type", "")
         if item_type == "function_call":
@@ -1113,10 +1122,14 @@ def _handle_stream_event(
                     partial=output,
                 ))
 
-    elif etype == "response.completed":
+    elif etype in (
+        "response.completed",
+        "response.incomplete",
+        "response.failed",
+    ):
         resp = getattr(event, "response", None)
         if resp is None:
-            return
+            raise RuntimeError(f"{etype} event is missing its response payload.")
 
         output.response_id = getattr(resp, "id", None)
 
@@ -1157,6 +1170,9 @@ def _handle_stream_event(
             output.stop_reason = StopReason.ERROR
             error = getattr(resp, "error", None)
             output.error_message = getattr(error, "message", None) or output.error_message
+        return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------

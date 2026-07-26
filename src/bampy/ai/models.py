@@ -55,6 +55,7 @@ _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 _ZAI_GLM_5_2_REASONING_EFFORT_MAP = {
     "minimal": "none",
@@ -80,6 +81,33 @@ _KIMI_K3_REASONING_EFFORT_MAP = {
     "xhigh": "max",
     "max": "max",
 }
+_OLLAMA_REASONING_EFFORT_MAP = {
+    "none": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "max",
+    "max": "max",
+}
+_OLLAMA_GLM_5_2_REASONING_EFFORT_MAP = {
+    "none": "none",
+    **_ZAI_GLM_5_2_REASONING_EFFORT_MAP,
+}
+
+
+def _ollama_chat_compat(
+    reasoning_effort_map: dict[str, str],
+) -> OpenAIChatCompat:
+    return OpenAIChatCompat(
+        max_tokens_field="max_tokens",
+        system_role="system",
+        replay_thinking_field="reasoning",
+        stream_reasoning_fields=["reasoning"],
+        supports_reasoning_effort=True,
+        supports_store=False,
+        reasoning_effort_map=reasoning_effort_map,
+    )
 
 
 BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
@@ -285,18 +313,6 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
             cost=_cost(input=0.10, output=0.40, cache_read=0.01),
         ),
     ),
-    "ollama": (
-        _model(
-            id="gemini-3-flash",
-            name="Gemini 3 Flash",
-            api="ollama-responses",
-            provider="ollama",
-            reasoning=True,
-            context_window=1_048_576,
-            max_tokens=65_536,
-            cost=_cost(input=0.50, output=3.0, cache_read=0.05),
-        ),
-    ),
     "opencode-go": (
         _model(
             id="kimi-k3",
@@ -462,6 +478,38 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
                 reasoning_effort_map=_DEEPSEEK_V4_REASONING_EFFORT_MAP,
                 thinking_param="deepseek",
                 thinking_default_enabled=True,
+            ),
+        ),
+    ),
+    "ollama": (
+        _model(
+            id="glm-5.2",
+            name="GLM 5.2 (Ollama Cloud)",
+            api="openai-completions",
+            provider="ollama",
+            base_url=_OLLAMA_CLOUD_BASE_URL,
+            reasoning=True,
+            input_types=["text"],
+            context_window=1_000_000,
+            max_tokens=131_072,
+            cost=_cost(input=0.0, output=0.0),
+            openai_chat_compat=_ollama_chat_compat(
+                _OLLAMA_GLM_5_2_REASONING_EFFORT_MAP,
+            ),
+        ),
+        _model(
+            id="kimi-k2.7-code",
+            name="Kimi K2.7 Code (Ollama Cloud)",
+            api="openai-completions",
+            provider="ollama",
+            base_url=_OLLAMA_CLOUD_BASE_URL,
+            reasoning=True,
+            input_types=["text", "image"],
+            context_window=262_144,
+            max_tokens=32_768,
+            cost=_cost(input=0.0, output=0.0),
+            openai_chat_compat=_ollama_chat_compat(
+                _OLLAMA_REASONING_EFFORT_MAP,
             ),
         ),
     ),

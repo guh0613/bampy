@@ -148,6 +148,12 @@ def _deepseek_chat_model() -> Model:
     )
 
 
+def _ollama_chat_model() -> Model:
+    model = get_model("kimi-k2.7-code", provider="ollama")
+    assert model is not None
+    return model
+
+
 def _responses_model(
     *,
     model_id: str = "gpt-5.4",
@@ -647,6 +653,28 @@ class TestChatCompletionMessageConversion:
         assert "reasoning" not in items[0]
         assert "reasoning_content" not in items[0]
 
+    def test_ollama_reasoning_replay_uses_reasoning_field(self):
+        from bampy.ai.providers.openai import _convert_chat_completion_messages
+
+        assistant = AssistantMessage(
+            api="openai-completions",
+            provider="ollama",
+            model="kimi-k2.7-code",
+            content=[
+                ThinkingContent(thinking="deep thought"),
+                TextContent(text="final answer"),
+            ],
+        )
+
+        items = _convert_chat_completion_messages(
+            _ollama_chat_model(),
+            Context(messages=[assistant]),
+        )
+
+        assert items[0]["role"] == "assistant"
+        assert items[0]["reasoning"] == "deep thought"
+        assert items[0]["content"] == "final answer"
+
     def test_kimi_reasoning_replay_falls_back_to_configured_reasoning_content_field(self):
         from bampy.ai.providers.openai import _convert_chat_completion_messages
 
@@ -806,8 +834,138 @@ class TestReasoningEffortResolution:
         assert _normalize_reasoning_effort(supported, "max") == "xhigh"
         assert _normalize_reasoning_effort(unsupported, "max") == "high"
 
+    @pytest.mark.parametrize(
+        ("requested", "backend"),
+        [
+            ("none", "none"),
+            ("minimal", "low"),
+            ("xhigh", "max"),
+            ("max", "max"),
+        ],
+    )
+    def test_ollama_compat_maps_reasoning_effort(self, requested: str, backend: str):
+        from bampy.ai.providers.openai import _normalize_reasoning_effort
+
+        assert _normalize_reasoning_effort(_ollama_chat_model(), requested) == backend
+
 
 class TestStreamEventHandling:
+    @pytest.mark.asyncio
+    async def test_stream_openai_rejects_missing_terminal_event(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai
+
+        class FakeResponses:
+            async def create(self, **_):
+                return _FakeAsyncIterator([
+                    SimpleNamespace(
+                        type="response.content_part.added",
+                        output_index=0,
+                        part=SimpleNamespace(type="output_text"),
+                    ),
+                    SimpleNamespace(
+                        type="response.output_text.delta",
+                        output_index=0,
+                        delta="partial content",
+                    ),
+                ])
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **_):
+                self.responses = FakeResponses()
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai(
+            _responses_model(reasoning=False),
+            Context(messages=[UserMessage(content="hello")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert result.stop_reason == StopReason.ERROR
+        assert result.error_message is not None
+        assert "without a terminal event" in result.error_message
+        assert any(
+            isinstance(block, TextContent) and block.text == "partial content"
+            for block in result.content
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_rejects_terminal_event_without_response(
+        self,
+        monkeypatch,
+    ):
+        from bampy.ai.providers.openai import stream_openai
+
+        class FakeResponses:
+            async def create(self, **_):
+                return _FakeAsyncIterator([
+                    SimpleNamespace(type="response.completed", response=None),
+                ])
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **_):
+                self.responses = FakeResponses()
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai(
+            _responses_model(reasoning=False),
+            Context(messages=[UserMessage(content="hello")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert result.stop_reason == StopReason.ERROR
+        assert result.error_message is not None
+        assert "missing its response payload" in result.error_message
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_accepts_incomplete_terminal_event(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai
+
+        class FakeResponses:
+            async def create(self, **_):
+                return _FakeAsyncIterator([
+                    SimpleNamespace(
+                        type="response.incomplete",
+                        response=SimpleNamespace(
+                            id="resp_incomplete",
+                            usage=None,
+                            status="incomplete",
+                            incomplete_details=SimpleNamespace(
+                                reason="max_output_tokens",
+                            ),
+                            output=[],
+                        ),
+                    ),
+                ])
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **_):
+                self.responses = FakeResponses()
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        result = await stream_openai(
+            _responses_model(reasoning=False),
+            Context(messages=[UserMessage(content="hello")]),
+            OpenAIOptions(api_key="test-key"),
+        ).result()
+
+        assert result.stop_reason == StopReason.LENGTH
+        assert result.response_id == "resp_incomplete"
+
     @pytest.mark.asyncio
     async def test_stream_openai_includes_encrypted_reasoning_without_explicit_effort(
         self,
@@ -823,7 +981,17 @@ class TestStreamEventHandling:
 
             async def _create(self, **params):
                 captured["params"] = params
-                return _FakeAsyncIterator([])
+                return _FakeAsyncIterator([
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=SimpleNamespace(
+                            id="resp_test",
+                            usage=None,
+                            status="completed",
+                            output=[],
+                        ),
+                    ),
+                ])
 
         monkeypatch.setitem(
             sys.modules,
@@ -932,6 +1100,33 @@ class TestChatCompletionStreaming:
         assert "max_completion_tokens" not in params
         assert params["reasoning_effort"] == backend_effort
         assert params["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert "store" not in params
+
+    @pytest.mark.parametrize(
+        ("requested_effort", "backend_effort"),
+        [("none", "none"), ("minimal", "low"), ("medium", "medium"), ("xhigh", "max")],
+    )
+    def test_build_chat_completion_params_for_ollama_uses_compat_fields(
+        self,
+        requested_effort: str,
+        backend_effort: str,
+    ):
+        from bampy.ai.providers.openai import _build_chat_completion_params
+
+        params = _build_chat_completion_params(
+            _ollama_chat_model(),
+            Context(system_prompt="Be precise.", messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(
+                api_key="test-cloud-key",
+                max_tokens=321,
+                reasoning_effort=requested_effort,
+            ),
+        )
+
+        assert params["messages"][0]["role"] == "system"
+        assert params["max_tokens"] == 321
+        assert "max_completion_tokens" not in params
+        assert params["reasoning_effort"] == backend_effort
         assert "store" not in params
 
     def test_build_chat_completion_params_for_kimi_uses_compat_fields(self):
