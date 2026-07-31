@@ -368,6 +368,15 @@ def _normalize_reasoning_effort(model: Model, effort: str | None) -> str | None:
     compat = model.openai_chat_compat
     if compat and effort in compat.reasoning_effort_map:
         return compat.reasoning_effort_map[effort]
+
+    if model.reasoning_efforts is not None and effort in model.reasoning_efforts:
+        return effort
+    if (
+        effort == "minimal"
+        and model.reasoning_efforts is not None
+        and "low" in model.reasoning_efforts
+    ):
+        return "low"
     if effort == "none":
         return None
 
@@ -888,7 +897,12 @@ def stream_openai(
 
             if model.reasoning:
                 if options and options.reasoning_effort:
-                    params["reasoning"] = {"effort": options.reasoning_effort}
+                    reasoning_effort = _normalize_reasoning_effort(
+                        model,
+                        options.reasoning_effort,
+                    )
+                    if reasoning_effort:
+                        params["reasoning"] = {"effort": reasoning_effort}
                 params["include"] = ["reasoning.encrypted_content"]
 
             event_stream.push(StartEvent(partial=output))

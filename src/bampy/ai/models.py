@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from bampy.ai.types import Model, ModelCost, OpenAIChatCompat, Usage, UsageCost
+from bampy.ai.types import (
+    Model,
+    ModelCost,
+    ModelCostTier,
+    OpenAIChatCompat,
+    ReasoningEffort,
+    Usage,
+    UsageCost,
+)
 
 
 def _cost(
@@ -13,12 +21,14 @@ def _cost(
     output: float,
     cache_read: float = 0.0,
     cache_write: float = 0.0,
+    tiers: list[ModelCostTier] | None = None,
 ) -> ModelCost:
     return ModelCost(
         input=input,
         output=output,
         cache_read=cache_read,
         cache_write=cache_write,
+        tiers=tiers or [],
     )
 
 
@@ -29,6 +39,7 @@ def _model(
     api: str,
     provider: str,
     reasoning: bool,
+    reasoning_efforts: list[ReasoningEffort] | None = None,
     input_types: list[str] | None = None,
     base_url: str = "",
     context_window: int,
@@ -43,6 +54,7 @@ def _model(
         provider=provider,
         base_url=base_url,
         reasoning=reasoning,
+        reasoning_efforts=reasoning_efforts,
         input_types=input_types or ["text", "image"],
         context_window=context_window,
         max_tokens=max_tokens,
@@ -314,6 +326,41 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
     ),
     "opencode-go": (
+        _model(
+            id="gpt-5.6-luna",
+            name="GPT-5.6 Luna",
+            api="openai-responses",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=[
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ],
+            context_window=1_050_000,
+            max_tokens=128_000,
+            # Use the stable Go rates from the provider docs. The lower rates
+            # currently exposed by models.dev reflect a temporary 2x promotion.
+            cost=_cost(
+                input=0.2,
+                output=1.2,
+                cache_read=0.02,
+                cache_write=0.25,
+                tiers=[
+                    ModelCostTier(
+                        context_over=272_000,
+                        input=0.4,
+                        output=1.8,
+                        cache_read=0.04,
+                        cache_write=0.5,
+                    ),
+                ],
+            ),
+        ),
         _model(
             id="kimi-k3",
             name="Kimi K3",
@@ -939,10 +986,16 @@ def get_providers() -> list[str]:
 
 def calculate_cost(model: Model, usage: Usage) -> UsageCost:
     """Calculate dollar cost from token usage and model pricing."""
-    input_cost = (model.cost.input / 1_000_000) * usage.input
-    output_cost = (model.cost.output / 1_000_000) * usage.output
-    cache_read_cost = (model.cost.cache_read / 1_000_000) * usage.cache_read
-    cache_write_cost = (model.cost.cache_write / 1_000_000) * usage.cache_write
+    rates: ModelCost | ModelCostTier = model.cost
+    request_input = usage.input + usage.cache_read + usage.cache_write
+    for tier in sorted(model.cost.tiers, key=lambda item: item.context_over):
+        if request_input > tier.context_over:
+            rates = tier
+
+    input_cost = (rates.input / 1_000_000) * usage.input
+    output_cost = (rates.output / 1_000_000) * usage.output
+    cache_read_cost = (rates.cache_read / 1_000_000) * usage.cache_read
+    cache_write_cost = (rates.cache_write / 1_000_000) * usage.cache_write
     return UsageCost(
         input=input_cost,
         output=output_cost,
@@ -956,6 +1009,9 @@ def supports_xhigh(model: Model | None) -> bool:
     """Return whether a model family supports ``xhigh`` reasoning."""
     if model is None:
         return False
+
+    if model.reasoning_efforts is not None:
+        return "xhigh" in model.reasoning_efforts
 
     model_id = model.id
     return any(

@@ -11,6 +11,7 @@ from bampy.ai.types import (
     Message,
     Model,
     ModelCost,
+    ModelCostTier,
     SimpleStreamOptions,
     StartEvent,
     StopReason,
@@ -97,11 +98,19 @@ class TestModel:
         assert m.context_window == 128_000
         assert m.max_tokens == 16384
         assert m.reasoning is False
+        assert m.reasoning_efforts is None
         assert m.input_types == ["text"]
 
     def test_model_cost(self):
         c = ModelCost(input=3.0, output=15.0)
         assert c.cache_read == 0.0
+        assert c.tiers == []
+
+    def test_model_cost_context_tier(self):
+        tier = ModelCostTier(context_over=272_000, input=0.4, output=1.8)
+        cost = ModelCost(input=0.2, output=1.2, tiers=[tier])
+
+        assert cost.tiers[0].context_over == 272_000
 
 
 class TestContext:

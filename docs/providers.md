@@ -239,23 +239,26 @@ OpenAIOptions(reasoning_effort="none")
 ## OpenCode Go
 
 - **依赖**：`bampy[openai]`
-- **API**：`openai-completions`
+- **API**：按模型使用 `openai-responses` 或 `openai-completions`
 - **provider**：`opencode-go`
 - **base_url**：`https://opencode.ai/zen/go/v1`
 
 ```python
-model = get_model("kimi-k3", provider="opencode-go")
+model = get_model("gpt-5.6-luna", provider="opencode-go")
 ```
 
-| 模型 ID | 名称 | input_types | context / max_tokens |
-| ------- | ---- | ----------- | -------------------- |
-| `kimi-k3` | Kimi K3 | text+image | ~1M / 131K |
-| `kimi-k2.7-code` | Kimi K2.7 Code | text+image | 262K / 32K |
-| `kimi-k2.6` | Kimi K2.6 | text+image | 262K / 65K |
-| `glm-5.2` | GLM 5.2 | text | 1M / 131K |
-| `glm-5.1` | GLM 5.1 | text | 198K / 65K |
+| 模型 ID | 名称 | API | input_types | context / max_tokens |
+| ------- | ---- | --- | ----------- | -------------------- |
+| `gpt-5.6-luna` | GPT-5.6 Luna | Responses | text+image | 1.05M / 128K |
+| `kimi-k3` | Kimi K3 | Chat Completions | text+image | ~1M / 131K |
+| `kimi-k2.7-code` | Kimi K2.7 Code | Chat Completions | text+image | 262K / 32K |
+| `kimi-k2.6` | Kimi K2.6 | Chat Completions | text+image | 262K / 65K |
+| `glm-5.2` | GLM 5.2 | Chat Completions | text | 1M / 131K |
+| `glm-5.1` | GLM 5.1 | Chat Completions | text | 198K / 65K |
 
-均通过 `OpenAIChatCompat` 处理 thinking / `reasoning_content` 等差异。例如 `kimi-k3` 默认开启 thinking，并支持后端的 `low` / `high` / `max` 三档 effort（`minimal`/`low` → `low`，`medium`/`high` → `high`，`xhigh`/`max` → `max`）；`glm-5.2` 有独立的 effort 映射表。需向网关传入有效 `api_key`。
+`gpt-5.6-luna` 通过 `/responses` 请求，支持 `none`、`low`、`medium`、`high`、`xhigh`、`max` 六档 reasoning effort；Bampy 的 `minimal` 会映射为后端的 `low`。其 Go 用量费率在输入上下文超过 272K tokens 时会对整次请求切换到高上下文档位，Bampy 会据此计算 usage cost。
+
+Chat Completions 模型通过 `OpenAIChatCompat` 处理 thinking / `reasoning_content` 等差异。例如 `kimi-k3` 默认开启 thinking，并支持后端的 `low` / `high` / `max` 三档 effort（`minimal`/`low` → `low`，`medium`/`high` → `high`，`xhigh`/`max` → `max`）；`glm-5.2` 有独立的 effort 映射表。所有模型均需向网关传入有效 `api_key`。
 
 ---
 

@@ -152,11 +152,22 @@ class Tool(BaseModel):
 # Model metadata
 # ---------------------------------------------------------------------------
 
+class ModelCostTier(BaseModel):
+    """Alternate token rates applied when a request exceeds a context size."""
+
+    context_over: int
+    input: float = 0.0       # $ per million tokens
+    output: float = 0.0
+    cache_read: float = 0.0
+    cache_write: float = 0.0
+
+
 class ModelCost(BaseModel):
     input: float = 0.0       # $ per million tokens
     output: float = 0.0
     cache_read: float = 0.0
     cache_write: float = 0.0
+    tiers: list[ModelCostTier] = Field(default_factory=list)
 
 
 class ThinkingLevel(StrEnum):
@@ -166,6 +177,9 @@ class ThinkingLevel(StrEnum):
     HIGH = "high"
     XHIGH = "xhigh"
     MAX = "max"
+
+
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class OpenAIChatCompat(BaseModel):
@@ -191,6 +205,7 @@ class Model(BaseModel):
     provider: str         # e.g. "anthropic", "openai"
     base_url: str = ""
     reasoning: bool = False
+    reasoning_efforts: list[ReasoningEffort] | None = None
     input_types: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
     context_window: int = 128_000
     max_tokens: int = 16384
@@ -251,7 +266,7 @@ class AnthropicOptions(StreamOptions):
 
 
 class OpenAIOptions(StreamOptions):
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+    reasoning_effort: ReasoningEffort | None = None
     tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None
     response_format: dict[str, Any] | None = None
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = None

@@ -47,6 +47,37 @@ class TestModelRegistry:
         assert model.openai_chat_compat.system_role == "system"
         assert model.openai_chat_compat.supports_store is False
 
+    def test_get_builtin_opencode_go_gpt_56_luna_model(self):
+        model = get_model("gpt-5.6-luna", provider="opencode-go")
+
+        assert model is not None
+        assert model.name == "GPT-5.6 Luna"
+        assert model.api == "openai-responses"
+        assert model.base_url == "https://opencode.ai/zen/go/v1"
+        assert model.reasoning is True
+        assert model.reasoning_efforts == [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ]
+        assert model.input_types == ["text", "image"]
+        assert model.context_window == 1_050_000
+        assert model.max_tokens == 128_000
+        assert model.cost.input == 0.2
+        assert model.cost.output == 1.2
+        assert model.cost.cache_read == 0.02
+        assert model.cost.cache_write == 0.25
+        assert len(model.cost.tiers) == 1
+        tier = model.cost.tiers[0]
+        assert tier.context_over == 272_000
+        assert tier.input == 0.4
+        assert tier.output == 1.8
+        assert tier.cache_read == 0.04
+        assert tier.cache_write == 0.5
+
     def test_get_builtin_opencode_go_kimi_k3_model(self):
         model = get_model("kimi-k3", provider="opencode-go")
 
@@ -285,6 +316,26 @@ class TestCostCalculation:
 
         assert usage.cost == original_cost
 
+    def test_calculate_cost_uses_context_tier_for_full_request(self):
+        model = get_model("gpt-5.6-luna", provider="opencode-go")
+        assert model is not None
+
+        at_threshold = calculate_cost(
+            model,
+            Usage(input=200_000, cache_read=72_000, output=1_000),
+        )
+        over_threshold = calculate_cost(
+            model,
+            Usage(input=200_001, cache_read=72_000, output=1_000),
+        )
+
+        assert at_threshold.input == pytest.approx(0.2 * 200_000 / 1_000_000)
+        assert at_threshold.cache_read == pytest.approx(0.02 * 72_000 / 1_000_000)
+        assert at_threshold.output == pytest.approx(1.2 * 1_000 / 1_000_000)
+        assert over_threshold.input == pytest.approx(0.4 * 200_001 / 1_000_000)
+        assert over_threshold.cache_read == pytest.approx(0.04 * 72_000 / 1_000_000)
+        assert over_threshold.output == pytest.approx(1.8 * 1_000 / 1_000_000)
+
     def test_zero_usage(self):
         model = Model(id="t", name="T", api="t", provider="t")
         usage = Usage()
@@ -295,6 +346,8 @@ class TestCostCalculation:
 class TestModelHelpers:
     def test_supports_xhigh(self):
         model = get_model("gpt-5.5", provider="openai")
+        assert supports_xhigh(model) is True
+        model = get_model("gpt-5.6-luna", provider="opencode-go")
         assert supports_xhigh(model) is True
         model = get_model("claude-opus-4-7", provider="anthropic")
         assert supports_xhigh(model) is True

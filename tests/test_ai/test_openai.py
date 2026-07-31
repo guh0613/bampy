@@ -819,6 +819,16 @@ class TestReasoningEffortResolution:
         model = Model(id="gpt-5.4", name="GPT-5.4", api="openai-responses", provider="openai", reasoning=True)
         assert _resolve_reasoning_effort(model, ThinkingLevel.XHIGH) == "xhigh"
 
+    def test_luna_preserves_native_max_reasoning_effort(self):
+        from bampy.ai.providers.openai import _normalize_reasoning_effort
+
+        model = get_model("gpt-5.6-luna", provider="opencode-go")
+        assert model is not None
+
+        assert _normalize_reasoning_effort(model, "none") == "none"
+        assert _normalize_reasoning_effort(model, "minimal") == "low"
+        assert _normalize_reasoning_effort(model, "max") == "max"
+
     def test_xhigh_clamped_for_unsupported_model(self):
         from bampy.ai.providers.openai import _resolve_reasoning_effort
 
@@ -1008,6 +1018,53 @@ class TestStreamEventHandling:
         assert result.stop_reason == StopReason.STOP
         assert captured["params"]["include"] == ["reasoning.encrypted_content"]
         assert "reasoning" not in captured["params"]
+
+    @pytest.mark.asyncio
+    async def test_stream_opencode_go_luna_uses_responses_request(self, monkeypatch):
+        from bampy.ai.providers.openai import stream_openai
+
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client"] = kwargs
+                self.responses = SimpleNamespace(create=self._create)
+
+            async def _create(self, **params):
+                captured["params"] = params
+                return _FakeAsyncIterator([
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=SimpleNamespace(
+                            id="resp_luna",
+                            usage=None,
+                            status="completed",
+                            output=[],
+                        ),
+                    ),
+                ])
+
+        monkeypatch.setitem(
+            sys.modules,
+            "openai",
+            SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
+        )
+
+        model = get_model("gpt-5.6-luna", provider="opencode-go")
+        assert model is not None
+        result = await stream_openai(
+            model,
+            Context(messages=[UserMessage(content="Hello")]),
+            OpenAIOptions(api_key="go-key", reasoning_effort="max"),
+        ).result()
+
+        assert result.stop_reason == StopReason.STOP
+        assert captured["client"]["base_url"] == "https://opencode.ai/zen/go/v1"
+        assert captured["params"]["model"] == "gpt-5.6-luna"
+        assert captured["params"]["max_output_tokens"] == 128_000
+        assert captured["params"]["reasoning"] == {"effort": "max"}
+        assert captured["params"]["include"] == ["reasoning.encrypted_content"]
+        assert captured["params"]["store"] is False
 
     def test_reasoning_item_stores_signature(self):
         from bampy.ai.providers.openai import _handle_stream_event
