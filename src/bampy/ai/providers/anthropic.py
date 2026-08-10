@@ -231,6 +231,21 @@ def _append_beta_header(headers: dict[str, str], value: str) -> None:
     headers["anthropic-beta"] = ",".join(values)
 
 
+def _get_cache_control(
+    base_url: str,
+    cache_retention: str | None,
+) -> dict[str, str] | None:
+    """Build an Anthropic prompt-cache breakpoint, defaulting to short retention."""
+    retention = cache_retention or "short"
+    if retention == "none":
+        return None
+
+    cache_control = {"type": "ephemeral"}
+    if retention == "long" and "api.anthropic.com" in base_url:
+        cache_control["ttl"] = "1h"
+    return cache_control
+
+
 # ---------------------------------------------------------------------------
 # Message conversion (bampy → Anthropic API format)
 # ---------------------------------------------------------------------------
@@ -238,6 +253,7 @@ def _append_beta_header(headers: dict[str, str], value: str) -> None:
 def _convert_messages(
     model: Model,
     context: Context,
+    cache_control: dict[str, str] | None = None,
 ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Convert context to Anthropic ``system`` and ``messages`` params."""
     from bampy.ai.types import AssistantMessage, ToolResultMessage, UserMessage
@@ -269,7 +285,37 @@ def _convert_messages(
             # Anthropic expects tool results as user messages
             _append_tool_result(messages, msg)
 
+    if cache_control and system:
+        system = [{"type": "text", "text": system, "cache_control": cache_control}]
+    _mark_last_user_message_for_caching(messages, cache_control)
     return system, messages
+
+
+def _mark_last_user_message_for_caching(
+    messages: list[dict[str, Any]],
+    cache_control: dict[str, str] | None,
+) -> None:
+    """Cache the complete stable conversation prefix through the last user block."""
+    if not cache_control or not messages or messages[-1].get("role") != "user":
+        return
+
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        if content:
+            messages[-1]["content"] = [
+                {"type": "text", "text": content, "cache_control": cache_control}
+            ]
+        return
+    if not isinstance(content, list) or not content:
+        return
+
+    last_block = content[-1]
+    if isinstance(last_block, dict) and last_block.get("type") in {
+        "text",
+        "image",
+        "tool_result",
+    }:
+        last_block["cache_control"] = cache_control
 
 
 def _convert_user_content(content: str | list) -> str | list[dict[str, Any]]:
@@ -306,7 +352,9 @@ def _convert_assistant_content(content: list) -> list[dict[str, Any]]:
         elif isinstance(item, ThinkingContent):
             if item.redacted:
                 blocks.append({"type": "redacted_thinking", "data": item.thinking_signature or ""})
-            elif item.thinking_signature:
+            elif item.thinking_signature is not None:
+                # Qwen's Anthropic-compatible endpoint currently returns an
+                # explicit empty signature; preserve it exactly during replay.
                 blocks.append({
                     "type": "thinking",
                     "thinking": item.thinking,
@@ -369,18 +417,25 @@ def _convert_tool_result_content(content: list) -> str | list[dict[str, Any]]:
     return blocks
 
 
-def _convert_tools(tools: list | None) -> list[dict[str, Any]] | None:
+def _convert_tools(
+    tools: list | None,
+    cache_control: dict[str, str] | None = None,
+) -> list[dict[str, Any]] | None:
     """Convert bampy Tool definitions to Anthropic tool format."""
     if not tools:
         return None
-    return [
+
+    converted = [
         {
-            "name": t.name,
-            "description": t.description,
-            "input_schema": t.parameters,
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.parameters,
         }
-        for t in tools
+        for tool in tools
     ]
+    if cache_control:
+        converted[-1]["cache_control"] = cache_control
+    return converted
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +499,13 @@ def stream_anthropic(
 
             client = anthropic_sdk.AsyncAnthropic(**client_kwargs)
 
-            # Build params
-            system, messages = _convert_messages(model, context)
+            # Build params. Short-lived prompt caching is enabled by default;
+            # callers can explicitly disable it with cache_retention="none".
+            cache_control = _get_cache_control(
+                model.base_url,
+                options.cache_retention if options else None,
+            )
+            system, messages = _convert_messages(model, context, cache_control)
             max_tokens = (options.max_tokens if options and options.max_tokens else None) or model.max_tokens
 
             params: dict[str, Any] = {
@@ -458,7 +518,7 @@ def stream_anthropic(
             if options and options.temperature is not None:
                 params["temperature"] = options.temperature
 
-            tools = _convert_tools(context.tools)
+            tools = _convert_tools(context.tools, cache_control)
             if tools:
                 params["tools"] = tools
 
@@ -603,7 +663,10 @@ def _handle_sse_event(
             ))
 
         elif block_type == "thinking":
-            content = ThinkingContent(thinking=getattr(block, "thinking", ""))
+            content = ThinkingContent(
+                thinking=getattr(block, "thinking", ""),
+                thinking_signature=getattr(block, "signature", None),
+            )
             output.content.append(content)
             stream.push(ThinkingStartEvent(
                 content_index=index, content=content, partial=output,
@@ -718,6 +781,15 @@ def _handle_sse_event(
 
         usage = getattr(event, "usage", None)
         if usage:
+            input_tokens = getattr(usage, "input_tokens", None)
+            cache_read_tokens = getattr(usage, "cache_read_input_tokens", None)
+            cache_write_tokens = getattr(usage, "cache_creation_input_tokens", None)
+            if input_tokens is not None:
+                output.usage.input = input_tokens
+            if cache_read_tokens is not None:
+                output.usage.cache_read = cache_read_tokens
+            if cache_write_tokens is not None:
+                output.usage.cache_write = cache_write_tokens
             output.usage.output = getattr(usage, "output_tokens", 0)
             output.usage.total_tokens = (
                 output.usage.input + output.usage.output

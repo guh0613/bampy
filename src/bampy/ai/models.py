@@ -67,6 +67,8 @@ _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+# The Anthropic SDK appends /v1/messages, so its base URL must omit /v1.
+_OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go"
 _OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 _ZAI_GLM_5_2_REASONING_EFFORT_MAP = {
@@ -326,6 +328,39 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
     ),
     "opencode-go": (
+        _model(
+            id="qwen3.8-max",
+            name="Qwen3.8 Max",
+            api="anthropic-messages",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_ANTHROPIC_BASE_URL,
+            reasoning=True,
+            context_window=1_000_000,
+            max_tokens=131_072,
+            cost=_cost(
+                input=2.0,
+                output=6.0,
+                cache_read=0.25,
+                cache_write=2.5,
+            ),
+        ),
+        _model(
+            id="qwen3.7-max",
+            name="Qwen3.7 Max",
+            api="anthropic-messages",
+            provider="opencode-go",
+            base_url=_OPENCODE_GO_ANTHROPIC_BASE_URL,
+            reasoning=True,
+            input_types=["text"],
+            context_window=1_000_000,
+            max_tokens=65_536,
+            cost=_cost(
+                input=2.5,
+                output=7.5,
+                cache_read=0.5,
+                cache_write=3.125,
+            ),
+        ),
         _model(
             id="gpt-5.6-luna",
             name="GPT-5.6 Luna",

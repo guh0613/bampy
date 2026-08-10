@@ -47,6 +47,36 @@ class TestModelRegistry:
         assert model.openai_chat_compat.system_role == "system"
         assert model.openai_chat_compat.supports_store is False
 
+    def test_get_builtin_opencode_go_qwen_max_models(self):
+        qwen_37 = get_model("qwen3.7-max", provider="opencode-go")
+        qwen_38 = get_model("qwen3.8-max", provider="opencode-go")
+
+        assert qwen_37 is not None
+        assert qwen_37.name == "Qwen3.7 Max"
+        assert qwen_37.api == "anthropic-messages"
+        assert qwen_37.base_url == "https://opencode.ai/zen/go"
+        assert qwen_37.reasoning is True
+        assert qwen_37.input_types == ["text"]
+        assert qwen_37.context_window == 1_000_000
+        assert qwen_37.max_tokens == 65_536
+        assert qwen_37.cost.input == 2.5
+        assert qwen_37.cost.output == 7.5
+        assert qwen_37.cost.cache_read == 0.5
+        assert qwen_37.cost.cache_write == 3.125
+
+        assert qwen_38 is not None
+        assert qwen_38.name == "Qwen3.8 Max"
+        assert qwen_38.api == "anthropic-messages"
+        assert qwen_38.base_url == "https://opencode.ai/zen/go"
+        assert qwen_38.reasoning is True
+        assert qwen_38.input_types == ["text", "image"]
+        assert qwen_38.context_window == 1_000_000
+        assert qwen_38.max_tokens == 131_072
+        assert qwen_38.cost.input == 2.0
+        assert qwen_38.cost.output == 6.0
+        assert qwen_38.cost.cache_read == 0.25
+        assert qwen_38.cost.cache_write == 2.5
+
     def test_get_builtin_opencode_go_gpt_56_luna_model(self):
         model = get_model("gpt-5.6-luna", provider="opencode-go")
 

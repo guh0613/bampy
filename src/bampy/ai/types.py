@@ -262,7 +262,7 @@ class AnthropicOptions(StreamOptions):
     thinking: AnthropicThinkingConfig | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     interleaved_thinking: bool | None = None
-    cache_retention: Literal["short", "long"] | None = None
+    cache_retention: Literal["none", "short", "long"] | None = None
 
 
 class OpenAIOptions(StreamOptions):

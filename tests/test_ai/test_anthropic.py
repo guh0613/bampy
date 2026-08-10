@@ -115,6 +115,38 @@ class TestMessageConversion:
         assert system == "You are helpful."
         assert messages[0]["role"] == "user"
 
+    def test_prompt_cache_breakpoints(self):
+        from bampy.ai.providers.anthropic import _convert_messages
+
+        model = _unit_model()
+        cache_control = {"type": "ephemeral"}
+        ctx = Context(
+            system_prompt="You are helpful.",
+            messages=[
+                UserMessage(content="first"),
+                AssistantMessage(content=[TextContent(text="response")]),
+                UserMessage(content="follow up"),
+            ],
+        )
+
+        system, messages = _convert_messages(model, ctx, cache_control)
+
+        assert system == [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": cache_control,
+            }
+        ]
+        assert messages[0]["content"] == "first"
+        assert messages[-1]["content"] == [
+            {
+                "type": "text",
+                "text": "follow up",
+                "cache_control": cache_control,
+            }
+        ]
+
     def test_assistant_text_and_tool_call(self):
         from bampy.ai.providers.anthropic import _convert_messages
 
@@ -173,6 +205,34 @@ class TestMessageConversion:
         assert content[0]["thinking"] == "deep thought"
         assert content[0]["signature"] == "sig123"
         assert content[1]["type"] == "text"
+
+    def test_qwen_empty_thinking_signature_is_replayed_exactly(self):
+        from bampy.ai.providers.anthropic import _convert_messages
+
+        model = _unit_model(model_id="qwen3.7-plus")
+        model = model.model_copy(update={"provider": "opencode-go"})
+        ctx = Context(messages=[
+            AssistantMessage(
+                api="anthropic-messages",
+                provider="opencode-go",
+                model=model.id,
+                content=[
+                    ThinkingContent(
+                        thinking="original qwen reasoning",
+                        thinking_signature="",
+                    ),
+                    ToolCall(id="toolu_1", name="search", arguments={"q": "test"}),
+                ],
+            ),
+        ])
+
+        _, messages = _convert_messages(model, ctx)
+
+        assert messages[0]["content"][0] == {
+            "type": "thinking",
+            "thinking": "original qwen reasoning",
+            "signature": "",
+        }
 
     def test_redacted_thinking(self):
         from bampy.ai.providers.anthropic import _convert_messages
@@ -283,11 +343,51 @@ class TestToolConversion:
         assert result[0]["name"] == "get_weather"
         assert result[0]["input_schema"] is not None
 
+    def test_cache_control_is_added_only_to_last_tool(self):
+        from bampy.ai.providers.anthropic import _convert_tools
+
+        tools = [
+            Tool(name="first", description="First", parameters={"type": "object"}),
+            Tool(name="second", description="Second", parameters={"type": "object"}),
+        ]
+        cache_control = {"type": "ephemeral"}
+
+        result = _convert_tools(tools, cache_control)
+
+        assert result is not None
+        assert "cache_control" not in result[0]
+        assert result[1]["cache_control"] == cache_control
+
     def test_convert_tools_none(self):
         from bampy.ai.providers.anthropic import _convert_tools
 
         assert _convert_tools(None) is None
         assert _convert_tools([]) is None
+
+
+class TestCacheControl:
+    def test_defaults_to_short_ephemeral_cache(self):
+        from bampy.ai.providers.anthropic import _get_cache_control
+
+        assert _get_cache_control("https://opencode.ai/zen/go", None) == {
+            "type": "ephemeral"
+        }
+
+    def test_none_disables_cache(self):
+        from bampy.ai.providers.anthropic import _get_cache_control
+
+        assert _get_cache_control("https://opencode.ai/zen/go", "none") is None
+
+    def test_long_ttl_is_only_sent_to_direct_anthropic(self):
+        from bampy.ai.providers.anthropic import _get_cache_control
+
+        assert _get_cache_control("https://api.anthropic.com", "long") == {
+            "type": "ephemeral",
+            "ttl": "1h",
+        }
+        assert _get_cache_control("https://opencode.ai/zen/go", "long") == {
+            "type": "ephemeral"
+        }
 
 
 class TestThinkingResolution:
@@ -384,6 +484,10 @@ class TestAnthropicOptions:
         opts = AnthropicOptions(effort="max", thinking=AnthropicThinkingAdaptive(effort="max"))
         assert opts.effort == "max"
         assert opts.thinking.effort == "max"
+
+    def test_cache_can_be_disabled(self):
+        opts = AnthropicOptions(cache_retention="none")
+        assert opts.cache_retention == "none"
 
 
 # ---------------------------------------------------------------------------
