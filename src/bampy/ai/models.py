@@ -65,7 +65,7 @@ def _model(
 
 _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
-_GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+_GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com"
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 # The Anthropic SDK appends /v1/messages, so its base URL must omit /v1.
 _OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go"
@@ -239,6 +239,71 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
     ),
     "google": (
         _model(
+            id="gemini-4-argon",
+            name="Gemini 4 Argon",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["low", "medium", "high"],
+            context_window=1_048_576,
+            # Keep the default at one hop; callers can opt into long decode.
+            max_tokens=65_536,
+            # Introductory standard pricing through 2026-11-30.
+            cost=_cost(input=2.0, output=10.0, cache_read=0.10),
+        ),
+        _model(
+            id="gemini-3.8-flash",
+            name="Gemini 3.8 Flash",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["low", "medium", "high"],
+            context_window=1_048_576,
+            max_tokens=65_536,
+            # Introductory standard pricing through 2026-12-31.
+            cost=_cost(input=0.75, output=3.75, cache_read=0.075),
+        ),
+        _model(
+            id="gemini-3.7-flash",
+            name="Gemini 3.7 Flash",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["low", "medium", "high"],
+            context_window=1_048_576,
+            max_tokens=65_536,
+            # Developer API routes this legacy ID to 3.8 Flash.
+            cost=_cost(input=0.75, output=3.75, cache_read=0.075),
+        ),
+        _model(
+            id="gemini-3.6-flash",
+            name="Gemini 3.6 Flash",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["minimal", "low", "medium", "high"],
+            context_window=1_048_576,
+            max_tokens=65_536,
+            # Introductory standard pricing through 2026-12-31.
+            cost=_cost(input=0.75, output=3.75, cache_read=0.075),
+        ),
+        _model(
+            id="gemini-3.5-flash-lite",
+            name="Gemini 3.5 Flash-Lite",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["minimal", "low", "medium", "high"],
+            context_window=1_048_576,
+            max_tokens=65_536,
+            cost=_cost(input=0.30, output=2.50, cache_read=0.03),
+        ),
+        _model(
             id="gemini-3.1-pro-preview",
             name="Gemini 3.1 Pro Preview",
             api="google-genai",
@@ -274,17 +339,6 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         _model(
             id="gemini-3.1-flash-lite",
             name="Gemini 3.1 Flash-Lite",
-            api="google-genai",
-            provider="google",
-            base_url=_GOOGLE_BASE_URL,
-            reasoning=True,
-            context_window=1_048_576,
-            max_tokens=65_536,
-            cost=_cost(input=0.25, output=1.50, cache_read=0.025),
-        ),
-        _model(
-            id="gemini-3.1-flash-lite-preview",
-            name="Gemini 3.1 Flash-Lite Preview",
             api="google-genai",
             provider="google",
             base_url=_GOOGLE_BASE_URL,
@@ -976,6 +1030,30 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
         ),
     ),
 }
+
+# Vertex uses the SDK's project/location endpoint resolution, never the
+# Developer API base URL. Keep a separate model object and pricing metadata.
+BUILTIN_MODELS["google-vertex"] = tuple(
+    model.model_copy(
+        deep=True,
+        update={"api": "google-vertex", "provider": "google-vertex", "base_url": ""},
+    )
+    for model in BUILTIN_MODELS["google"]
+    if model.id in {
+        "gemini-4-argon",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    }
+)
+
 
 def _iter_builtin_models() -> Iterable[Model]:
     for models in BUILTIN_MODELS.values():

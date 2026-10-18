@@ -35,6 +35,12 @@ def _load_google() -> ApiProviderEntry:
     return get_provider_entry()
 
 
+def _load_google_vertex() -> ApiProviderEntry:
+    from bampy.ai.providers.gemini import get_vertex_provider_entry
+
+    return get_vertex_provider_entry()
+
+
 def register_builtin_providers(*, force: bool = False) -> None:
     """Register all built-in LLM providers (lazy-loaded)."""
     if force:
@@ -58,5 +64,10 @@ def register_builtin_providers(*, force: bool = False) -> None:
     register_api_provider(
         "google-genai",
         loader=_load_google,
+        source_id=_BUILTIN_SOURCE_ID,
+    )
+    register_api_provider(
+        "google-vertex",
+        loader=_load_google_vertex,
         source_id=_BUILTIN_SOURCE_ID,
     )

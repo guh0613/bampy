@@ -1,4 +1,4 @@
-"""Google Gemini API provider adapter.
+"""Google Gemini Developer API and Vertex AI provider adapter.
 
 Maps Google GenAI SDK streaming events → bampy AssistantMessageEvent protocol.
 """
@@ -6,6 +6,9 @@ Maps Google GenAI SDK streaming events → bampy AssistantMessageEvent protocol.
 from __future__ import annotations
 
 import base64
+import re
+import uuid
+from contextlib import aclosing
 from typing import Any
 
 from bampy.ai.models import calculate_cost
@@ -36,6 +39,7 @@ from bampy.ai.types import (
     ToolCall,
     ToolCallEndEvent,
     ToolCallStartEvent,
+    VertexAIOptions,
 )
 
 
@@ -57,18 +61,10 @@ _GEMINI25_THINKING_LEVEL_BUDGETS: dict[str, int] = {
     "medium": 8192,
     "high": 16384,
 }
-_GEMINI3_FLASH_THINKING_LEVELS: dict[ThinkingLevel, str] = {
+_THINKING_LEVELS: dict[ThinkingLevel, str] = {
     ThinkingLevel.MINIMAL: "minimal",
     ThinkingLevel.LOW: "low",
     ThinkingLevel.MEDIUM: "medium",
-    ThinkingLevel.HIGH: "high",
-    ThinkingLevel.XHIGH: "high",
-    ThinkingLevel.MAX: "high",
-}
-_GEMINI3_PRO_THINKING_LEVELS: dict[ThinkingLevel, str] = {
-    ThinkingLevel.MINIMAL: "low",
-    ThinkingLevel.LOW: "low",
-    ThinkingLevel.MEDIUM: "high",
     ThinkingLevel.HIGH: "high",
     ThinkingLevel.XHIGH: "high",
     ThinkingLevel.MAX: "high",
@@ -80,61 +76,58 @@ _SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 # Message conversion (bampy → Gemini API format)
 # ---------------------------------------------------------------------------
 
+def _gemini_version(model_id: str) -> tuple[int, int]:
+    """Recognize model IDs as well as SDK-supported model resource names."""
+    match = re.match(r"gemini-(\d+)(?:\.(\d+))?(?:-|$)", model_id.rsplit("/", 1)[-1])
+    return (int(match[1]), int(match[2] or 0)) if match else (0, 0)
+
+
 def _supports_multimodal_tool_result(model_id: str) -> bool:
     """Check if the model supports image data in function responses."""
-    return model_id.startswith("gemini-3")
+    return _gemini_version(model_id) >= (3, 0)
 
 
 def _uses_thinking_level(model_id: str) -> bool:
     """Whether a Gemini model should use thinking_level instead of budget."""
-    return model_id.startswith("gemini-3")
+    return _gemini_version(model_id) >= (3, 0)
 
 
-def _is_gemini3_pro(model_id: str) -> bool:
-    """Whether a Gemini 3 model is in the Pro family."""
-    return "-pro" in model_id
-
-
-def _normalize_gemini3_thinking_level(model_id: str, level: str) -> str:
+def _normalize_thinking_level(model_id: str, level: str) -> str:
     """Clamp a user-provided thinking level to the model family's support."""
-    if _is_gemini3_pro(model_id):
+    version = _gemini_version(model_id)
+    if version == (3, 0) and "-pro" in model_id:
         return "low" if level in {"minimal", "low"} else "high"
+    if level == "minimal" and (
+        version >= (4, 0)
+        or "-pro" in model_id
+        or (version >= (3, 7) and "-flash" in model_id)
+    ):
+        return "low"
     return level
 
 
-def _reasoning_to_gemini3_thinking_level(
+def _reasoning_to_thinking_level(
     model_id: str,
     reasoning: ThinkingLevel,
 ) -> str:
-    """Map bampy's reasoning enum to Gemini 3's thinking_level values."""
-    mapping = (
-        _GEMINI3_PRO_THINKING_LEVELS
-        if _is_gemini3_pro(model_id)
-        else _GEMINI3_FLASH_THINKING_LEVELS
-    )
-    return mapping.get(reasoning, "high")
+    """Map bampy's reasoning enum to the model's thinking_level values."""
+    return _normalize_thinking_level(model_id, _THINKING_LEVELS[reasoning])
 
 
 def _requires_tool_call_id(model_id: str) -> bool:
     """Whether function call / response ids must be explicitly preserved."""
-    return model_id.startswith("claude-") or model_id.startswith("gpt-oss-")
+    return (
+        _gemini_version(model_id) >= (3, 5)
+        or model_id.startswith("claude-")
+        or model_id.startswith("gpt-oss-")
+    )
 
 
 def _normalize_gemini_tool_call_id(tool_call_id: str, model_id: str) -> str:
-    """Normalize ids only for models that require explicit tool call ids."""
-    if not _requires_tool_call_id(model_id):
+    """Normalize third-party IDs while preserving Gemini's opaque call IDs."""
+    if not model_id.startswith(("claude-", "gpt-oss-")):
         return tool_call_id
     return sanitize_tool_call_id(tool_call_id)
-
-
-def _retain_thought_signature(
-    existing: str | bytes | None,
-    incoming: bytes | None,
-) -> str | bytes | None:
-    """Keep the last non-empty thought signature seen for a block."""
-    if incoming:
-        return incoming
-    return existing
 
 
 def _convert_messages(model: Model, context: Context) -> list[Any]:
@@ -228,7 +221,7 @@ def _convert_assistant_parts(model: Model, content: list) -> list[Any]:
             fc = types.FunctionCall(**fc_kwargs)
             part_kwargs: dict[str, Any] = {"function_call": fc}
             effective_signature = item.thought_signature
-            if effective_signature is None and model.id.startswith("gemini-3"):
+            if effective_signature is None and _uses_thinking_level(model.id):
                 effective_signature = _SKIP_THOUGHT_SIGNATURE
             if effective_signature is not None:
                 part_kwargs["thought_signature"] = effective_signature
@@ -321,6 +314,99 @@ _STOP_REASON_MAP: dict[str, StopReason] = {
 }
 
 
+def _build_client_kwargs(model: Model, options: GeminiOptions | None) -> dict[str, Any]:
+    """Select the channel explicitly, leaving credential discovery to the SDK."""
+    vertex = model.api == "google-vertex"
+    kwargs: dict[str, Any] = {"enterprise": vertex}
+    if options and options.api_key:
+        kwargs["api_key"] = options.api_key
+    if isinstance(options, VertexAIOptions):
+        if not vertex:
+            raise ValueError("VertexAIOptions requires Model.api='google-vertex'")
+        for field in ("project", "location", "credentials"):
+            value = getattr(options, field)
+            if value is not None:
+                kwargs[field] = value
+
+    http_options: dict[str, Any] = {}
+    if model.base_url:
+        # The SDK appends api_version itself. Accept legacy base URLs that
+        # already end in /v1beta (or a gateway's /v1beta1) without duplicating it.
+        version_suffix = re.search(r"/(v\d+(?:(?:alpha|beta)\d*)?)/?$", model.base_url)
+        if version_suffix:
+            http_options["base_url"] = model.base_url[:version_suffix.start()]
+            http_options["api_version"] = version_suffix[1]
+        else:
+            http_options["base_url"] = model.base_url
+    headers = {**(model.headers or {}), **(options.headers or {} if options else {})}
+    if headers:
+        http_options["headers"] = headers
+    if isinstance(options, GeminiOptions):
+        if options.api_version:
+            http_options["api_version"] = options.api_version
+        if options.timeout_ms is not None:
+            http_options["timeout"] = options.timeout_ms
+    if _gemini_version(model.id) >= (4, 0):
+        # Each continuation hop can take up to 20 minutes.
+        http_options.setdefault("timeout", 1_200_000)
+        max_tokens = (
+            options.max_tokens if options and options.max_tokens is not None else model.max_tokens
+        )
+        if vertex and max_tokens > 65_536 and http_options.get("api_version") == "v1":
+            raise ValueError("Gemini 4 long decode on Vertex AI requires api_version='v1beta1'")
+    if http_options:
+        kwargs["http_options"] = http_options
+    return kwargs
+
+
+def _build_config(model: Model, context: Context, options: GeminiOptions | None) -> Any:
+    from google.genai import types
+
+    max_tokens = (
+        options.max_tokens if options and options.max_tokens is not None else model.max_tokens
+    )
+    kwargs: dict[str, Any] = {
+        "max_output_tokens": max_tokens,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
+    }
+    version = _gemini_version(model.id)
+    if options and options.temperature is not None and version < (3, 5):
+        kwargs["temperature"] = options.temperature
+    if context.system_prompt:
+        kwargs["system_instruction"] = context.system_prompt
+    tools = _convert_tools(context.tools)
+    if tools:
+        kwargs["tools"] = tools
+        if model.api == "google-vertex":
+            # bampy exposes complete tool calls, not Vertex's PartialArg protocol.
+            kwargs["tool_config"] = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    stream_function_call_arguments=False,
+                ),
+            )
+
+    thinking: dict[str, Any] = {}
+    if isinstance(options, GeminiOptions):
+        if version >= (3, 5) and options.thinking_budget is not None:
+            raise ValueError(f"{model.id} requires thinking_level; use it instead of thinking_budget")
+        if options.thinking_budget is not None and options.thinking_level is not None:
+            raise ValueError("Set only one of thinking_level and thinking_budget")
+        if options.thinking_level is not None:
+            if _uses_thinking_level(model.id):
+                thinking["thinking_level"] = _normalize_thinking_level(
+                    model.id, options.thinking_level,
+                )
+            else:
+                thinking["thinking_budget"] = _GEMINI25_THINKING_LEVEL_BUDGETS[
+                    options.thinking_level
+                ]
+        elif options.thinking_budget is not None:
+            thinking["thinking_budget"] = options.thinking_budget
+    if thinking or model.reasoning:
+        kwargs["thinking_config"] = types.ThinkingConfig(include_thoughts=True, **thinking)
+    return types.GenerateContentConfig(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Public stream functions
 # ---------------------------------------------------------------------------
@@ -342,267 +428,47 @@ def stream_gemini(
     async def _run() -> None:
         try:
             from google import genai
-            from google.genai import types
         except ImportError as e:
             _emit_error(event_stream, model, f"google-genai SDK not installed: {e}")
             return
 
         try:
-            # Build client
-            api_key = options.api_key if options else None
-            client_kwargs: dict[str, Any] = {}
-            if api_key:
-                client_kwargs["api_key"] = api_key
-
-            # Support custom base_url and headers via http_options
-            base_url = model.base_url or None
-            extra_headers: dict[str, str] = {}
-            if model.headers:
-                extra_headers.update(model.headers)
-            if options and options.headers:
-                extra_headers.update(options.headers)
-            if base_url or extra_headers:
-                http_opts: dict[str, Any] = {}
-                if base_url:
-                    http_opts["base_url"] = base_url
-                if extra_headers:
-                    http_opts["headers"] = extra_headers
-                client_kwargs["http_options"] = http_opts
-
-            client = genai.Client(**client_kwargs)
-
-            # Build config
             contents = _convert_messages(model, context)
-            config_kwargs: dict[str, Any] = {}
-
-            max_tokens = (
-                (options.max_tokens if options and options.max_tokens else None)
-                or model.max_tokens
-            )
-            config_kwargs["max_output_tokens"] = max_tokens
-
-            if options and options.temperature is not None:
-                config_kwargs["temperature"] = options.temperature
-
-            if context.system_prompt:
-                config_kwargs["system_instruction"] = context.system_prompt
-
-            tools = _convert_tools(context.tools)
-            if tools:
-                config_kwargs["tools"] = tools
-                config_kwargs["automatic_function_calling"] = (
-                    types.AutomaticFunctionCallingConfig(disable=True)
+            if _gemini_version(model.id) >= (3, 5) and contents and contents[-1].role == "model":
+                raise ValueError(
+                    f"{model.id} does not support assistant prefills; "
+                    "end the conversation with a user message or tool result"
                 )
+            config = _build_config(model, context, options)
 
-            # Thinking config
-            if options and isinstance(options, GeminiOptions):
-                if (
-                    _uses_thinking_level(model.id)
-                    and options.thinking_level is not None
-                ):
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(
-                        thinking_level=_normalize_gemini3_thinking_level(
-                            model.id,
-                            options.thinking_level,
-                        ),
-                        include_thoughts=True,
-                    )
-                elif options.thinking_budget is not None:
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(
-                        thinking_budget=options.thinking_budget,
-                        include_thoughts=True,
-                    )
-                elif (
-                    not _uses_thinking_level(model.id)
-                    and options.thinking_level is not None
-                ):
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(
-                        thinking_budget=_GEMINI25_THINKING_LEVEL_BUDGETS[
-                            options.thinking_level
-                        ],
-                        include_thoughts=True,
-                    )
-
-            if "thinking_config" not in config_kwargs and model.reasoning:
-                config_kwargs["thinking_config"] = types.ThinkingConfig(
-                    include_thoughts=True,
-                )
-
-            config = types.GenerateContentConfig(**config_kwargs)
-
-            # Emit start
             event_stream.push(StartEvent(partial=output))
-
-            # Track streaming state
-            current_block_type: str | None = None  # "text" | "thinking"
-            content_index = -1
-
-            # Stream
-            async for chunk in await client.aio.models.generate_content_stream(
-                model=model.id,
-                contents=contents,
-                config=config,
-            ):
-                # Capture response_id
-                resp_id = getattr(chunk, "response_id", None)
-                if resp_id:
-                    output.response_id = resp_id
-
-                if not chunk.candidates:
-                    if chunk.usage_metadata:
-                        _update_usage(output, chunk.usage_metadata)
-                    continue
-
-                candidate = chunk.candidates[0]
-
-                # Check finish reason
-                finish_reason = getattr(candidate, "finish_reason", None)
-                if finish_reason is not None:
-                    reason_name = (
-                        getattr(finish_reason, "name", None)
-                        or str(finish_reason)
+            state = _GeminiStreamState(event_stream, output)
+            # Close both SDK transports on success, failure, and cancellation.
+            with genai.Client(**_build_client_kwargs(model, options)) as client:
+                async with client.aio as aclient:
+                    response = await aclient.models.generate_content_stream(
+                        model=model.id,
+                        contents=contents,
+                        config=config,
                     )
-                    output.stop_reason = _STOP_REASON_MAP.get(
-                        reason_name, StopReason.STOP,
-                    )
-
-                content = getattr(candidate, "content", None)
-                if not content:
-                    if chunk.usage_metadata:
-                        _update_usage(output, chunk.usage_metadata)
-                    continue
-
-                parts = getattr(content, "parts", None) or []
-                for part in parts:
-                    fc = getattr(part, "function_call", None)
-                    is_thought = getattr(part, "thought", False)
-                    text = getattr(part, "text", None)
-                    sig = getattr(part, "thought_signature", None)
-
-                    if fc is not None:
-                        # End previous block if any
-                        if current_block_type is not None:
-                            _end_current_block(
-                                event_stream, output,
-                                content_index, current_block_type,
-                            )
-                            current_block_type = None
-
-                        # Emit tool call as a complete block
-                        args = dict(fc.args) if fc.args else {}
-                        call_id = (
-                            getattr(fc, "id", None)
-                            or f"gemini_call_{len(output.content)}"
-                        )
-                        tool_call = ToolCall(
-                            id=call_id,
-                            name=fc.name,
-                            arguments=args,
-                            thought_signature=sig,
-                        )
-                        output.content.append(tool_call)
-                        content_index = len(output.content) - 1
-                        event_stream.push(ToolCallStartEvent(
-                            content_index=content_index,
-                            content=tool_call,
-                            partial=output,
-                        ))
-                        event_stream.push(ToolCallEndEvent(
-                            content_index=content_index,
-                            content=tool_call,
-                            partial=output,
-                        ))
-
-                    elif is_thought and (text is not None or sig is not None):
-                        if current_block_type != "thinking":
-                            # End previous block
-                            if current_block_type is not None:
-                                _end_current_block(
-                                    event_stream, output,
-                                    content_index, current_block_type,
-                                )
-                            # Start thinking block
-                            thinking = ThinkingContent(thinking="", thinking_signature=sig)
-                            output.content.append(thinking)
-                            content_index = len(output.content) - 1
-                            current_block_type = "thinking"
-                            event_stream.push(ThinkingStartEvent(
-                                content_index=content_index,
-                                content=thinking,
-                                partial=output,
-                            ))
-
-                        # Delta
-                        block = output.content[content_index]
-                        if isinstance(block, ThinkingContent):
-                            block.thinking += text or ""
-                            block.thinking_signature = _retain_thought_signature(
-                                block.thinking_signature,
-                                sig,
-                            )
-                        event_stream.push(ThinkingDeltaEvent(
-                            content_index=content_index,
-                            delta=text or "",
-                            partial=output,
-                        ))
-
-                    elif text is not None:
-                        if current_block_type != "text":
-                            # End previous block
-                            if current_block_type is not None:
-                                _end_current_block(
-                                    event_stream, output,
-                                    content_index, current_block_type,
-                                )
-                            # Start text block
-                            text_content = TextContent(text="", text_signature=sig)
-                            output.content.append(text_content)
-                            content_index = len(output.content) - 1
-                            current_block_type = "text"
-                            event_stream.push(TextStartEvent(
-                                content_index=content_index,
-                                content=text_content,
-                                partial=output,
-                            ))
-
-                        # Delta
-                        block = output.content[content_index]
-                        if isinstance(block, TextContent):
-                            block.text += text
-                            block.text_signature = _retain_thought_signature(
-                                block.text_signature,
-                                sig,
-                            )
-                        event_stream.push(TextDeltaEvent(
-                            content_index=content_index,
-                            delta=text,
-                            partial=output,
-                        ))
-
-                # Usage from chunk
-                if chunk.usage_metadata:
-                    _update_usage(output, chunk.usage_metadata)
-
-            # End final block
-            if current_block_type is not None:
-                _end_current_block(
-                    event_stream, output,
-                    content_index, current_block_type,
-                )
-
-            # Override stop reason if tool calls present
-            if any(isinstance(b, ToolCall) for b in output.content):
-                output.stop_reason = StopReason.TOOL_USE
+                    async with aclosing(response):
+                        async for chunk in response:
+                            state.process(chunk)
+            state.finish()
 
             # Calculate cost
             output.usage.cost = calculate_cost(model, output.usage)
 
-            event_stream.push(DoneEvent(reason=output.stop_reason, message=output))
+            if output.stop_reason == StopReason.ERROR:
+                event_stream.push(ErrorEvent(reason=StopReason.ERROR, error=output))
+            else:
+                event_stream.push(DoneEvent(reason=output.stop_reason, message=output))
             event_stream.end(output)
 
         except Exception as e:
             output.stop_reason = StopReason.ERROR
             output.error_message = str(e)
+            output.usage.cost = calculate_cost(model, output.usage)
             event_stream.push(ErrorEvent(reason=StopReason.ERROR, error=output))
             event_stream.end(output)
 
@@ -628,7 +494,7 @@ def stream_simple_gemini(
         thinking_level = None
         if options.reasoning is not None and model.reasoning:
             if _uses_thinking_level(model.id):
-                thinking_level = _reasoning_to_gemini3_thinking_level(
+                thinking_level = _reasoning_to_thinking_level(
                     model.id,
                     options.reasoning,
                 )
@@ -653,6 +519,124 @@ def stream_simple_gemini(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+class _GeminiStreamState:
+    """Translate one SDK stream, including automatically resumed decode hops."""
+
+    def __init__(self, stream: AssistantMessageEventStream, output: AssistantMessage):
+        self.stream = stream
+        self.output = output
+        self.current_block_type: str | None = None
+        self.content_index = -1
+        self.saw_finish = False
+
+    def process(self, chunk: Any) -> None:
+        if chunk.response_id:
+            self.output.response_id = chunk.response_id
+        # The SDK already accumulates usage across continuation hops.
+        if chunk.usage_metadata:
+            _update_usage(self.output, chunk.usage_metadata)
+        feedback = chunk.prompt_feedback
+        if feedback and feedback.block_reason not in (None, "BLOCKED_REASON_UNSPECIFIED"):
+            self.saw_finish = True
+            self.output.stop_reason = StopReason.ERROR
+            self.output.error_message = (
+                f"Gemini prompt blocked: {feedback.block_reason}"
+                f" {feedback.block_reason_message or ''}"
+            ).strip()
+        if not chunk.candidates:
+            return
+        candidate = chunk.candidates[0]
+        if candidate.finish_reason not in (None, "FINISH_REASON_UNSPECIFIED"):
+            self.saw_finish = True
+            reason = getattr(candidate.finish_reason, "name", None) or str(candidate.finish_reason)
+            self.output.stop_reason = _STOP_REASON_MAP.get(reason, StopReason.ERROR)
+            if self.output.stop_reason == StopReason.ERROR:
+                self.output.error_message = (
+                    f"Gemini generation stopped: {reason} {candidate.finish_message or ''}"
+                ).strip()
+        if candidate.content:
+            for part in candidate.content.parts or []:
+                self._process_part(part)
+
+    def _close_block(self) -> None:
+        if self.current_block_type is not None:
+            _end_current_block(
+                self.stream, self.output, self.content_index, self.current_block_type,
+            )
+            self.current_block_type = None
+
+    def _process_part(self, part: Any) -> None:
+        if part.function_call is not None:
+            self._close_block()
+            fc = part.function_call
+            if fc.partial_args or fc.will_continue:
+                raise ValueError("Received partial function arguments despite requesting complete calls")
+            tool_call = ToolCall(
+                id=fc.id or f"gemini_call_{uuid.uuid4().hex}",
+                name=fc.name,
+                arguments=dict(fc.args or {}),
+                thought_signature=part.thought_signature,
+            )
+            self.output.content.append(tool_call)
+            self.content_index = len(self.output.content) - 1
+            self.stream.push(ToolCallStartEvent(
+                content_index=self.content_index, content=tool_call, partial=self.output,
+            ))
+            self.stream.push(ToolCallEndEvent(
+                content_index=self.content_index, content=tool_call, partial=self.output,
+            ))
+            return
+        if part.text is None and part.thought_signature is None:
+            return
+
+        block_type = "thinking" if part.thought else "text"
+        # A signature-bearing part must not be merged with neighboring parts.
+        previous = self.output.content[self.content_index] if self.content_index >= 0 else None
+        previous_signature = (
+            previous.thinking_signature if isinstance(previous, ThinkingContent)
+            else previous.text_signature if isinstance(previous, TextContent)
+            else None
+        )
+        if (
+            self.current_block_type != block_type
+            or part.thought_signature is not None
+            or previous_signature is not None
+        ):
+            self._close_block()
+            block = (
+                ThinkingContent(thinking="", thinking_signature=part.thought_signature)
+                if part.thought else TextContent(text="", text_signature=part.thought_signature)
+            )
+            self.output.content.append(block)
+            self.content_index = len(self.output.content) - 1
+            self.current_block_type = block_type
+            start_event = ThinkingStartEvent if part.thought else TextStartEvent
+            self.stream.push(start_event(
+                content_index=self.content_index, content=block, partial=self.output,
+            ))
+        block = self.output.content[self.content_index]
+        text = part.text or ""
+        if isinstance(block, ThinkingContent):
+            block.thinking += text
+            delta_event = ThinkingDeltaEvent
+        else:
+            assert isinstance(block, TextContent)
+            block.text += text
+            delta_event = TextDeltaEvent
+        self.stream.push(delta_event(
+            content_index=self.content_index, delta=text, partial=self.output,
+        ))
+
+    def finish(self) -> None:
+        self._close_block()
+        if not self.saw_finish:
+            raise ValueError("Gemini stream ended without a finish reason")
+        if self.output.stop_reason == StopReason.STOP and any(
+            isinstance(block, ToolCall) for block in self.output.content
+        ):
+            self.output.stop_reason = StopReason.TOOL_USE
+
+
 def _end_current_block(
     stream: AssistantMessageEventStream,
     output: AssistantMessage,
@@ -674,9 +658,14 @@ def _end_current_block(
 
 
 def _update_usage(output: AssistantMessage, usage_meta: Any) -> None:
-    """Update usage from Gemini usage metadata."""
-    output.usage.input = getattr(usage_meta, "prompt_token_count", 0) or 0
-    output.usage.output = getattr(usage_meta, "candidates_token_count", 0) or 0
+    """Normalize cumulative usage into disjoint billable token categories."""
+    prompt = getattr(usage_meta, "prompt_token_count", 0) or 0
+    cached = getattr(usage_meta, "cached_content_token_count", 0) or 0
+    output.usage.input = max(0, prompt - cached)
+    output.usage.output = (
+        (getattr(usage_meta, "candidates_token_count", 0) or 0)
+        + (getattr(usage_meta, "thoughts_token_count", 0) or 0)
+    )
     output.usage.cache_read = (
         getattr(usage_meta, "cached_content_token_count", 0) or 0
     )
@@ -708,6 +697,14 @@ def _emit_error(
 def get_provider_entry() -> ApiProviderEntry:
     return ApiProviderEntry(
         api="google-genai",
+        stream=stream_gemini,  # type: ignore[arg-type]
+        stream_simple=stream_simple_gemini,  # type: ignore[arg-type]
+    )
+
+
+def get_vertex_provider_entry() -> ApiProviderEntry:
+    return ApiProviderEntry(
+        api="google-vertex",
         stream=stream_gemini,  # type: ignore[arg-type]
         stream_simple=stream_simple_gemini,  # type: ignore[arg-type]
     )

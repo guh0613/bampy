@@ -254,7 +254,7 @@ supports_xhigh(model)           # 部分 GPT / Claude Opus 4.7 家族
 register_model(Model(
     id="my-model",
     name="My Model",
-    api="openai-completions",  # 或 openai-responses / anthropic-messages / google-genai
+    api="openai-completions",  # 或 openai-responses / anthropic-messages / google-genai / google-vertex
     provider="custom",
     base_url="https://my-api.example.com/v1",
     input_types=["text"],
@@ -286,7 +286,8 @@ stream(model, ctx, AnthropicOptions(
 stream(model, ctx, OpenAIOptions(reasoning_effort="high"))
 
 stream(model, ctx, GeminiOptions(thinking_level="medium"))
-# Gemini 2.5 系列也可用 thinking_budget=8192
+# Gemini 4 使用 low / medium / high；Gemini 2.5 可用 thinking_budget=8192
+# Vertex AI 使用同一协议，详见 providers.md 的 VertexAIOptions 示例
 ```
 
 `SimpleStreamOptions` 在 `temperature` / `max_tokens` / `api_key` / `headers` / `cancellation` 之外增加 `reasoning: ThinkingLevel | None`，由各 `stream_simple_*` 映射。详见 [providers.md](providers.md)。
@@ -303,6 +304,7 @@ stream(model, ctx, GeminiOptions(thinking_level="medium"))
 | `openai-responses` | `providers.openai`（Responses；Ollama v0.13.3+ 可复用） |
 | `openai-completions` | `providers.openai`（Chat Completions；Ollama 默认建议） |
 | `google-genai` | `providers.gemini` |
+| `google-vertex` | `providers.gemini`（`VertexAIOptions`；ADC / Vertex Express key） |
 
 也可显式调用 `register_builtin_providers()` / `ensure_builtin_providers_registered()`。
 

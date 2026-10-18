@@ -50,6 +50,7 @@ from bampy.ai.types import (
     Usage,
     UsageCost,
     UserMessage,
+    VertexAIOptions,
 )
 from bampy.ai.validation import (
     ToolValidationError,
@@ -93,6 +94,7 @@ __all__ = [
     "Usage",
     "UsageCost",
     "UserMessage",
+    "VertexAIOptions",
     "calculate_cost",
     "complete",
     "complete_simple",

@@ -11,7 +11,7 @@ uv add bampy
 # 按需安装提供商 SDK
 uv add "bampy[anthropic]"       # Anthropic Claude
 uv add "bampy[openai]"          # OpenAI
-uv add "bampy[google]"          # Google Gemini
+uv add "bampy[google]"          # Google Gemini / Vertex AI
 uv add "bampy[all-providers]"   # 上述全部
 
 # 开发依赖（pytest / ruff）

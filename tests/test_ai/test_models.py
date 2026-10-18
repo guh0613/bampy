@@ -17,6 +17,28 @@ from bampy.ai.types import Model, ModelCost, Usage
 
 
 class TestModelRegistry:
+    @pytest.mark.parametrize("provider", ["google", "google-vertex"])
+    @pytest.mark.parametrize("model_id,cost,minimal", [
+        ("gemini-3.8-flash", (0.75, 3.75, 0.075), False),
+        ("gemini-3.7-flash", (0.75, 3.75, 0.075), False),
+        ("gemini-3.6-flash", (0.75, 3.75, 0.075), True),
+        ("gemini-3.5-flash-lite", (0.30, 2.50, 0.03), True),
+    ])
+    def test_current_gemini_flash_models(self, provider, model_id, cost, minimal):
+        model = get_model(model_id, provider=provider)
+        assert model is not None
+        assert model.api == ("google-vertex" if provider == "google-vertex" else "google-genai")
+        assert model.reasoning is True
+        assert model.input_types == ["text", "image"]
+        assert model.context_window == 1_048_576
+        assert model.max_tokens == 65_536
+        assert model.reasoning_efforts == (["minimal"] if minimal else []) + ["low", "medium", "high"]
+        assert (model.cost.input, model.cost.output, model.cost.cache_read) == cost
+
+    def test_retired_gemini_preview_is_not_advertised(self):
+        assert get_model("gemini-3.1-flash-lite-preview", provider="google") is None
+        assert get_model("gemini-3.1-flash-lite-preview", provider="google-vertex") is None
+
     def test_builtin_models_exist(self):
         assert len(MODELS) > 0
 
