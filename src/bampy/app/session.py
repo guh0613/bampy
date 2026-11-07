@@ -12,15 +12,17 @@ walks root → leaf handling compaction summaries along the path.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from bampy.ai.types import ImageContent, TextContent
+from bampy.ai.types import AssistantMessage, ImageContent, TextContent
 
 from .messages import (
     create_branch_summary_message,
@@ -252,6 +254,11 @@ def _entry_to_dict(entry: FileEntry) -> dict[str, Any]:
     from dataclasses import asdict
 
     d = asdict(entry)  # type: ignore[arg-type]
+    if isinstance(entry, SessionMessageEntry):
+        for _, block, field_name in _assistant_signature_blocks(d["message"]):
+            signature = block.get(field_name)
+            if isinstance(signature, bytes):
+                block[field_name] = {"base64": base64.b64encode(signature).decode("ascii")}
     return d
 
 
@@ -274,6 +281,23 @@ def _dict_to_entry(d: dict[str, Any]) -> FileEntry:
     if t == "message":
         e = SessionMessageEntry(**base_kwargs)
         e.message = d.get("message", {})
+        decoded_blocks = {}
+        for index, block, field_name in _assistant_signature_blocks(e.message):
+            signature = block.get(field_name)
+            if isinstance(signature, dict) and signature.keys() == {"base64"}:
+                decoded_blocks[index] = {
+                    **block,
+                    field_name: base64.b64decode(signature["base64"], validate=True),
+                }
+        if decoded_blocks:
+            # Copy only when decoding so a backend can reuse its raw records.
+            e.message = {
+                **e.message,
+                "content": [
+                    decoded_blocks.get(index, block)
+                    for index, block in enumerate(e.message["content"])
+                ],
+            }
         return e
     if t == "model_change":
         e2 = ModelChangeEntry(**base_kwargs)
@@ -324,10 +348,50 @@ def _dict_to_entry(d: dict[str, Any]) -> FileEntry:
     return SessionMessageEntry(message=d, **base_kwargs)
 
 
+_ASSISTANT_SIGNATURE_FIELDS = {
+    "text": "text_signature",
+    "thinking": "thinking_signature",
+    "tool_call": "thought_signature",
+}
+
+
+def _assistant_signature_blocks(
+    message: dict[str, Any],
+) -> Iterator[tuple[int, dict[str, Any], str]]:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for index, block in enumerate(content):
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if isinstance(block_type, str) and (field_name := _ASSISTANT_SIGNATURE_FIELDS.get(block_type)):
+            yield index, block, field_name
+
+
 def _message_to_serializable(message: Any) -> dict[str, Any]:
-    """Convert an agent message to a JSON-serialisable dict."""
+    """Convert an agent message to a session record, preserving binary signatures."""
     from pydantic import BaseModel
 
+    if isinstance(message, AssistantMessage):
+        signatures = {}
+        for index, block in enumerate(message.content):
+            field_name = _ASSISTANT_SIGNATURE_FIELDS[block.type]
+            signature = getattr(block, field_name)
+            if isinstance(signature, bytes):
+                signatures[index] = (field_name, signature)
+        if signatures:
+            # Pydantic's JSON mode interprets bytes as UTF-8 by default.
+            excluded = {index: {field_name} for index, (field_name, _) in signatures.items()}
+            result = message.model_dump(
+                mode="json",
+                exclude={"content": excluded},
+            )
+            for index, (field_name, signature) in signatures.items():
+                result["content"][index][field_name] = signature
+            return result
     if isinstance(message, BaseModel):
         return message.model_dump(mode="json")
     if isinstance(message, dict):

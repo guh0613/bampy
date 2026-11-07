@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from bampy.ai.types import AssistantMessage, ImageContent, TextContent, ThinkingContent, UserMessage
+from bampy.ai.types import (
+    AssistantMessage,
+    ImageContent,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    UserMessage,
+)
 from bampy.app.messages import convert_app_messages_to_llm
 from bampy.app.session import (
     InMemoryBackend,
@@ -159,6 +166,33 @@ class TestSessionPersistence:
             "redacted": False,
         }
         assert assistant["content"][1]["text"] == "done"
+
+    def test_persistence_round_trips_binary_and_legacy_text_signatures(self, tmp_path: Path):
+        session_file = tmp_path / "session.jsonl"
+        session = SessionManager("/repo", session_file=str(session_file))
+        signed_reply = AssistantMessage(
+            content=[
+                TextContent(text="reply", text_signature=b"\xff\x80"),
+                ThinkingContent(thinking="thought", thinking_signature=b"\x00\xfe"),
+                ToolCall(id="call", name="read", arguments={"path": "notes"}, thought_signature=b"sig"),
+            ],
+        )
+        legacy_reply = AssistantMessage(
+            content=[ThinkingContent(thinking="legacy", thinking_signature="/4A=")],
+        )
+        session.append_message(UserMessage(content="hello"))
+        session.append_message(signed_reply)
+        session.append_message(legacy_reply)
+
+        reopened = SessionManager.open(str(session_file))
+        reopened.append_message(signed_reply)
+        context = SessionManager.open(str(session_file)).build_session_context()
+
+        assert convert_app_messages_to_llm(context.messages)[1:] == [
+            signed_reply,
+            legacy_reply,
+            signed_reply,
+        ]
 
     def test_build_session_info_reads_persisted_file(self, tmp_path: Path):
         sm = SessionManager(

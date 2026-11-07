@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -73,6 +74,8 @@ from .session import CompactionEntry, SessionManager, SessionMessageEntry
 from .skills import LoadSkillsResult, Skill, load_skills
 from .system_prompt import ContextFile, BuildSystemPromptOptions, build_system_prompt, load_context_files
 from .tools import create_coding_tools
+
+logger = logging.getLogger(__name__)
 
 
 def _default_model() -> Model:
@@ -644,8 +647,12 @@ class AgentSession:
 
     async def _process_agent_event(self, event: AgentEvent) -> None:
         await self._emit_extension_event(event)
-        self._persist_event_message(event)
-        self._persist_terminal_agent_end_message(event)
+        try:
+            self._persist_event_message(event)
+            self._persist_terminal_agent_end_message(event)
+        except Exception:
+            logger.exception("Failed to persist session event %s", event.type)
+            raise
 
         if event.type == "agent_start":
             self._turn_index = 0
