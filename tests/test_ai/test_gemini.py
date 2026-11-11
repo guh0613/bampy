@@ -406,6 +406,11 @@ class TestThinkingMapping:
         ("gemini-4-argon", ThinkingLevel.MAX, "high"),
         ("models/gemini-4-argon", ThinkingLevel.MEDIUM, "medium"),
         ("projects/p/locations/global/publishers/google/models/gemini-4-argon", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-carbon", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-carbon", ThinkingLevel.MEDIUM, "medium"),
+        ("gemini-4-carbon", ThinkingLevel.XHIGH, "high"),
+        ("gemini-4-carbon", ThinkingLevel.MAX, "high"),
+        ("projects/p/locations/global/publishers/google/models/gemini-4-carbon", ThinkingLevel.MINIMAL, "low"),
     ])
     def test_family_thinking_levels(self, model_id, reasoning, expected):
         from bampy.ai.providers.gemini import _reasoning_to_thinking_level

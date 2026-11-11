@@ -239,6 +239,20 @@ BUILTIN_MODELS: dict[str, tuple[Model, ...]] = {
     ),
     "google": (
         _model(
+            id="gemini-4-carbon",
+            name="Gemini 4 Carbon",
+            api="google-genai",
+            provider="google",
+            base_url=_GOOGLE_BASE_URL,
+            reasoning=True,
+            reasoning_efforts=["low", "medium", "high"],
+            context_window=1_048_576,
+            # Keep the default at one hop; callers can opt into long decode.
+            max_tokens=65_536,
+            # Standard pricing through 2026-11-30; doubles from 2026-12-01.
+            cost=_cost(input=2.0, output=10.0, cache_read=0.10),
+        ),
+        _model(
             id="gemini-4-argon",
             name="Gemini 4 Argon",
             api="google-genai",
@@ -1040,6 +1054,7 @@ BUILTIN_MODELS["google-vertex"] = tuple(
     )
     for model in BUILTIN_MODELS["google"]
     if model.id in {
+        "gemini-4-carbon",
         "gemini-4-argon",
         "gemini-3.8-flash",
         "gemini-3.7-flash",

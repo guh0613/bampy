@@ -35,6 +35,19 @@ class TestModelRegistry:
         assert model.reasoning_efforts == (["minimal"] if minimal else []) + ["low", "medium", "high"]
         assert (model.cost.input, model.cost.output, model.cost.cache_read) == cost
 
+    @pytest.mark.parametrize("provider", ["google", "google-vertex"])
+    @pytest.mark.parametrize("model_id", ["gemini-4-carbon", "gemini-4-argon"])
+    def test_gemini_4_models(self, provider, model_id):
+        model = get_model(model_id, provider=provider)
+        assert model is not None
+        assert model.api == ("google-vertex" if provider == "google-vertex" else "google-genai")
+        assert model.reasoning is True
+        assert model.input_types == ["text", "image"]
+        assert model.context_window == 1_048_576
+        assert model.max_tokens == 65_536
+        assert model.reasoning_efforts == ["low", "medium", "high"]
+        assert (model.cost.input, model.cost.output, model.cost.cache_read) == (2.0, 10.0, 0.10)
+
     def test_retired_gemini_preview_is_not_advertised(self):
         assert get_model("gemini-3.1-flash-lite-preview", provider="google") is None
         assert get_model("gemini-3.1-flash-lite-preview", provider="google-vertex") is None

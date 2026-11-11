@@ -182,6 +182,7 @@ model = get_model("gemini-4-argon", provider="google")
 
 | 模型 ID | 名称 |
 | ------- | ---- |
+| `gemini-4-carbon` | Gemini 4 Carbon |
 | `gemini-4-argon` | Gemini 4 Argon |
 | `gemini-3.8-flash` | Gemini 3.8 Flash |
 | `gemini-3.7-flash` | Gemini 3.7 Flash（Developer API 自动路由到 3.8） |
@@ -220,7 +221,7 @@ Gemini 3.5+ 使用 `thinking_level`；传入旧的 `thinking_budget` 时，适�
 
 Gemini 4 的输入、thinking 和输出共享 1,048,576 tokens。内置 `max_tokens=65536` 是默认输出预算；需要长输出时显式传入 `GeminiOptions(max_tokens=131072)` 或 `SimpleStreamOptions(max_tokens=131072)`，新版 SDK 自动跟随 continuation token。每段请求默认超时 20 分钟，可用 `GeminiOptions(timeout_ms=...)` 调整。接口仍使用 GenerateContent，bampy 自行管理对话历史。
 
-用量统计中，`input` 不含缓存命中，`cache_read` 单独计费，`output` 包含 thinking。SDK 已累加长输出各段的 usage，bampy 读取最新累计值。内置 Gemini 4 价格按 2026-10-18 的标准、global 费率记录：输入/缓存输入/输出分别为 $2/$0.10/$10 每百万 tokens，优惠至 2026-11-30；之后官方公布的费率为 $4/$0.20/$20。模型注册表是静态快照，日期、区域或合同价格不同时应通过 `register_model` 覆盖 `cost`。
+用量统计中，`input` 不含缓存命中，`cache_read` 单独计费，`output` 包含 thinking。SDK 已累加长输出各段的 usage，bampy 读取最新累计值。内置 Gemini 4 Argon（2026-10-18 快照）与 Carbon（2026-11-11 快照）价格按标准、global 费率记录：输入/缓存输入/输出分别为 $2/$0.10/$10 每百万 tokens，有效至 2026-11-30；之后官方公布的费率为 $4/$0.20/$20。Gemini 4 Carbon 在 Developer API 上没有免费层，在 Vertex 上面向通过验证的企业客户开放。模型注册表是静态快照，日期、区域或合同价格不同时应通过 `register_model` 覆盖 `cost`。
 
 官方参考：[Gemini 4 GenerateContent 迁移](https://ai.google.dev/gemini-api/docs/generate-content/latest-model)、[thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)。
 
@@ -234,7 +235,7 @@ Gemini 3.8 / 3.7 / 3.6 Flash 的标准 global 价格快照（2026-10-18）为输
 - **API / provider**：`google-vertex`。SDK 新文档将渠道称为 Gemini Enterprise Agent Platform，原 Vertex AI 配置仍适用。
 - **端点**：由 SDK 按项目、区域解析，内置模型的 `base_url` 留空。
 
-内置 Gemini 4 Argon、3.8 / 3.7 / 3.6 Flash、3.5 Flash-Lite、3.1 Pro Preview、3 Flash Preview、3.1 Flash-Lite 和 Gemini 2.5 Pro/Flash/Flash-Lite。模型可用性取决于项目权限、区域和 Google 的下线计划；其他型号可注册 `api="google-vertex"` 的自定义模型。
+内置 Gemini 4 Carbon、Gemini 4 Argon、3.8 / 3.7 / 3.6 Flash、3.5 Flash-Lite、3.1 Pro Preview、3 Flash Preview、3.1 Flash-Lite 和 Gemini 2.5 Pro/Flash/Flash-Lite。模型可用性取决于项目权限、区域和 Google 的下线计划；其他型号可注册 `api="google-vertex"` 的自定义模型。
 
 使用 Application Default Credentials（本地 `gcloud auth application-default login`，服务器使用工作负载身份或服务账号）：
 
@@ -274,7 +275,7 @@ Vertex Express 使用 `VertexAIOptions(api_key="...")`；`stream_simple` 可通�
 
 两个渠道按 `Model.api` 明确选择，不受 `GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE` 全局开关干扰。`stream_simple` / Agent 使用 SDK 环境变量及 ADC；需要逐次传入项目、区域或 Credentials 时，使用 `stream(..., VertexAIOptions(...))`。
 
-官方参考：[Gemini 4 Vertex AI 开发指南](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)、[SDK](https://googleapis.github.io/python-genai/)、[Vertex 定价](https://cloud.google.com/vertex-ai/generative-ai/pricing)。
+官方参考：Gemini 4 Vertex AI 开发指南（[Argon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)、[Carbon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-carbon)）、[SDK](https://googleapis.github.io/python-genai/)、[Vertex 定价](https://cloud.google.com/vertex-ai/generative-ai/pricing)。
 
 ---
 

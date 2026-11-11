@@ -110,7 +110,7 @@ def _options(channel="google", **kwargs):
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
     "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_modern_gemini_request_and_tool_roundtrip(sdk, channel, model_id):
@@ -153,7 +153,7 @@ async def test_modern_gemini_request_and_tool_roundtrip(sdk, channel, model_id):
     assert fc_part["functionCall"]["id"] == fr["id"] == "call:42"
     assert fc_part["thoughtSignature"] == signature
     assert fr["parts"][0]["inline_data"]["mime_type"] == "image/png"
-    if model_id == "gemini-4-argon":
+    if model_id.startswith("gemini-4-"):
         assert sdk.client_kwargs[0]["http_options"]["timeout"] == 1_200_000
     if channel == "google-vertex":
         assert sdk.requests[0].url.host == "aiplatform.googleapis.com"
@@ -198,7 +198,7 @@ async def test_flash_simple_reasoning_wire_config(sdk, channel, model_id, minima
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+    "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model_id):
     result = await stream(
@@ -211,7 +211,7 @@ async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model
 
 
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
     "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_gemini_rejects_assistant_prefills(sdk, model_id):
