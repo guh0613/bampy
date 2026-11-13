@@ -11,7 +11,7 @@ import uuid
 from contextlib import aclosing
 from typing import Any
 
-from bampy.ai.models import calculate_cost
+from bampy.ai.models import calculate_cost, supports_xhigh
 from bampy.ai.providers._cancellation import spawn_provider_task
 from bampy.ai.api_registry import ApiProviderEntry
 from bampy.ai.providers._transform import sanitize_tool_call_id, transform_messages
@@ -60,16 +60,21 @@ _GEMINI25_THINKING_LEVEL_BUDGETS: dict[str, int] = {
     "low": 2048,
     "medium": 8192,
     "high": 16384,
+    "xhigh": 16384,
 }
 _THINKING_LEVELS: dict[ThinkingLevel, str] = {
     ThinkingLevel.MINIMAL: "minimal",
     ThinkingLevel.LOW: "low",
     ThinkingLevel.MEDIUM: "medium",
     ThinkingLevel.HIGH: "high",
-    ThinkingLevel.XHIGH: "high",
-    ThinkingLevel.MAX: "high",
+    ThinkingLevel.XHIGH: "xhigh",
+    ThinkingLevel.MAX: "xhigh",
 }
 _SKIP_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
+# google-genai 3 defaults the Developer API to v1. Pin the surface this adapter
+# is built and tested against; callers can override via GeminiOptions.api_version
+# or a versioned Model.base_url.
+_DEVELOPER_API_VERSION = "v1beta"
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +97,12 @@ def _uses_thinking_level(model_id: str) -> bool:
     return _gemini_version(model_id) >= (3, 0)
 
 
-def _normalize_thinking_level(model_id: str, level: str) -> str:
+def _normalize_thinking_level(model: Model, level: str) -> str:
     """Clamp a user-provided thinking level to the model family's support."""
+    model_id = model.id
     version = _gemini_version(model_id)
+    if level == "xhigh" and not supports_xhigh(model):
+        level = "high"
     if version == (3, 0) and "-pro" in model_id:
         return "low" if level in {"minimal", "low"} else "high"
     if level == "minimal" and (
@@ -107,11 +115,11 @@ def _normalize_thinking_level(model_id: str, level: str) -> str:
 
 
 def _reasoning_to_thinking_level(
-    model_id: str,
+    model: Model,
     reasoning: ThinkingLevel,
 ) -> str:
     """Map bampy's reasoning enum to the model's thinking_level values."""
-    return _normalize_thinking_level(model_id, _THINKING_LEVELS[reasoning])
+    return _normalize_thinking_level(model, _THINKING_LEVELS[reasoning])
 
 
 def _requires_tool_call_id(model_id: str) -> bool:
@@ -346,6 +354,8 @@ def _build_client_kwargs(model: Model, options: GeminiOptions | None) -> dict[st
             http_options["api_version"] = options.api_version
         if options.timeout_ms is not None:
             http_options["timeout"] = options.timeout_ms
+    if not vertex:
+        http_options.setdefault("api_version", _DEVELOPER_API_VERSION)
     if _gemini_version(model.id) >= (4, 0):
         # Each continuation hop can take up to 20 minutes.
         http_options.setdefault("timeout", 1_200_000)
@@ -394,7 +404,7 @@ def _build_config(model: Model, context: Context, options: GeminiOptions | None)
         if options.thinking_level is not None:
             if _uses_thinking_level(model.id):
                 thinking["thinking_level"] = _normalize_thinking_level(
-                    model.id, options.thinking_level,
+                    model, options.thinking_level,
                 )
             else:
                 thinking["thinking_budget"] = _GEMINI25_THINKING_LEVEL_BUDGETS[
@@ -495,7 +505,7 @@ def stream_simple_gemini(
         if options.reasoning is not None and model.reasoning:
             if _uses_thinking_level(model.id):
                 thinking_level = _reasoning_to_thinking_level(
-                    model.id,
+                    model,
                     options.reasoning,
                 )
             else:

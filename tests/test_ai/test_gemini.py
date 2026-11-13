@@ -390,15 +390,25 @@ class TestGeminiOptions:
         assert opts.thinking_level == "low"
 
 
+def _thinking_model(model_id: str) -> Model:
+    """Registry metadata under a possibly qualified ID, or a bare unit model."""
+    registered = get_model(model_id.rsplit("/", 1)[-1], provider="google")
+    if registered is None:
+        return _unit_model(model_id=model_id)
+    return registered.model_copy(update={"id": model_id})
+
+
 class TestThinkingMapping:
     @pytest.mark.parametrize("model_id,reasoning,expected", [
         ("gemini-3.8-flash", ThinkingLevel.MINIMAL, "low"),
         ("gemini-3.8-flash", ThinkingLevel.MEDIUM, "medium"),
+        ("gemini-3.8-flash", ThinkingLevel.XHIGH, "high"),
         ("gemini-3.7-flash", ThinkingLevel.MINIMAL, "low"),
         ("gemini-3.6-flash", ThinkingLevel.MINIMAL, "minimal"),
         ("gemini-3.5-flash-lite", ThinkingLevel.MINIMAL, "minimal"),
         ("projects/p/locations/global/publishers/google/models/gemini-3.8-flash", ThinkingLevel.MINIMAL, "low"),
         ("gemini-3-pro-preview", ThinkingLevel.MEDIUM, "high"),
+        ("gemini-3-pro-preview", ThinkingLevel.MAX, "high"),
         ("gemini-3.1-pro-preview", ThinkingLevel.MEDIUM, "medium"),
         ("gemini-4-argon", ThinkingLevel.MINIMAL, "low"),
         ("gemini-4-argon", ThinkingLevel.MEDIUM, "medium"),
@@ -411,50 +421,47 @@ class TestThinkingMapping:
         ("gemini-4-carbon", ThinkingLevel.XHIGH, "high"),
         ("gemini-4-carbon", ThinkingLevel.MAX, "high"),
         ("projects/p/locations/global/publishers/google/models/gemini-4-carbon", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-hydrogen", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-hydrogen", ThinkingLevel.MEDIUM, "medium"),
+        ("gemini-4-hydrogen", ThinkingLevel.HIGH, "high"),
+        ("gemini-4-hydrogen", ThinkingLevel.XHIGH, "xhigh"),
+        ("gemini-4-hydrogen", ThinkingLevel.MAX, "xhigh"),
+        ("projects/p/locations/global/publishers/google/models/gemini-4-hydrogen", ThinkingLevel.XHIGH, "xhigh"),
     ])
     def test_family_thinking_levels(self, model_id, reasoning, expected):
         from bampy.ai.providers.gemini import _reasoning_to_thinking_level
 
-        assert _reasoning_to_thinking_level(model_id, reasoning) == expected
+        assert _reasoning_to_thinking_level(_thinking_model(model_id), reasoning) == expected
+
+    @pytest.mark.parametrize("model_id,level,expected", [
+        ("gemini-4-hydrogen", "xhigh", "xhigh"),
+        ("gemini-4-hydrogen", "minimal", "low"),
+        ("gemini-4-carbon", "xhigh", "high"),
+        ("gemini-3.1-pro-preview", "minimal", "low"),
+        ("gemini-3.1-pro-preview", "medium", "medium"),
+        ("gemini-3-pro-preview", "xhigh", "high"),
+    ])
+    def test_explicit_thinking_level_is_clamped(self, model_id, level, expected):
+        from bampy.ai.providers.gemini import _normalize_thinking_level
+
+        assert _normalize_thinking_level(_thinking_model(model_id), level) == expected
+
+    def test_xhigh_requires_declared_support(self):
+        from bampy.ai.providers.gemini import _normalize_thinking_level
+
+        # Custom registrations opt in through reasoning_efforts.
+        custom = _unit_model(model_id="gemini-4-hydrogen")
+        assert _normalize_thinking_level(custom, "xhigh") == "high"
+        opted_in = custom.model_copy(update={"reasoning_efforts": ["low", "medium", "high", "xhigh"]})
+        assert _normalize_thinking_level(opted_in, "xhigh") == "xhigh"
 
     def test_gemini3_flash_maps_simple_reasoning_to_thinking_level(self):
         from bampy.ai.providers.gemini import _reasoning_to_thinking_level
 
-        assert _reasoning_to_thinking_level(
-            "gemini-3-flash-preview",
-            ThinkingLevel.MINIMAL,
-        ) == "minimal"
-        assert _reasoning_to_thinking_level(
-            "gemini-3-flash-preview",
-            ThinkingLevel.MEDIUM,
-        ) == "medium"
-        assert _reasoning_to_thinking_level(
-            "gemini-3-flash-preview",
-            ThinkingLevel.XHIGH,
-        ) == "high"
-
-    def test_gemini31_pro_supports_medium_thinking(self):
-        from bampy.ai.providers.gemini import (
-            _normalize_thinking_level,
-            _reasoning_to_thinking_level,
-        )
-
-        assert _reasoning_to_thinking_level(
-            "gemini-3.1-pro-preview",
-            ThinkingLevel.MINIMAL,
-        ) == "low"
-        assert _reasoning_to_thinking_level(
-            "gemini-3.1-pro-preview",
-            ThinkingLevel.MEDIUM,
-        ) == "medium"
-        assert _normalize_thinking_level(
-            "gemini-3.1-pro-preview",
-            "minimal",
-        ) == "low"
-        assert _normalize_thinking_level(
-            "gemini-3.1-pro-preview",
-            "medium",
-        ) == "medium"
+        model = _thinking_model("gemini-3-flash-preview")
+        assert _reasoning_to_thinking_level(model, ThinkingLevel.MINIMAL) == "minimal"
+        assert _reasoning_to_thinking_level(model, ThinkingLevel.MEDIUM) == "medium"
+        assert _reasoning_to_thinking_level(model, ThinkingLevel.XHIGH) == "high"
 
 
 # ---------------------------------------------------------------------------

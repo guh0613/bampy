@@ -279,7 +279,7 @@ class OpenAIOptions(StreamOptions):
 
 class GeminiOptions(StreamOptions):
     thinking_budget: int | None = None
-    thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
+    thinking_level: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     timeout_ms: int | None = Field(default=None, gt=0)
     api_version: str | None = None
 

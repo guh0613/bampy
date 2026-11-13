@@ -36,8 +36,12 @@ class TestModelRegistry:
         assert (model.cost.input, model.cost.output, model.cost.cache_read) == cost
 
     @pytest.mark.parametrize("provider", ["google", "google-vertex"])
-    @pytest.mark.parametrize("model_id", ["gemini-4-carbon", "gemini-4-argon"])
-    def test_gemini_4_models(self, provider, model_id):
+    @pytest.mark.parametrize("model_id,efforts,cost", [
+        ("gemini-4-hydrogen", ["low", "medium", "high", "xhigh"], (1.5, 7.5, 0.075)),
+        ("gemini-4-carbon", ["low", "medium", "high"], (2.0, 10.0, 0.10)),
+        ("gemini-4-argon", ["low", "medium", "high"], (2.0, 10.0, 0.10)),
+    ])
+    def test_gemini_4_models(self, provider, model_id, efforts, cost):
         model = get_model(model_id, provider=provider)
         assert model is not None
         assert model.api == ("google-vertex" if provider == "google-vertex" else "google-genai")
@@ -45,8 +49,9 @@ class TestModelRegistry:
         assert model.input_types == ["text", "image"]
         assert model.context_window == 1_048_576
         assert model.max_tokens == 65_536
-        assert model.reasoning_efforts == ["low", "medium", "high"]
-        assert (model.cost.input, model.cost.output, model.cost.cache_read) == (2.0, 10.0, 0.10)
+        assert model.reasoning_efforts == efforts
+        assert supports_xhigh(model) is ("xhigh" in efforts)
+        assert (model.cost.input, model.cost.output, model.cost.cache_read) == cost
 
     def test_retired_gemini_preview_is_not_advertised(self):
         assert get_model("gemini-3.1-flash-lite-preview", provider="google") is None

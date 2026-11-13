@@ -7,7 +7,7 @@
 ```bash
 uv add "bampy[anthropic]"       # Anthropic SDK
 uv add "bampy[openai]"          # OpenAI SDK（OpenAI 及兼容端点均依赖它）
-uv add "bampy[google]"          # google-genai >= 2.30.1（Gemini / Vertex AI）
+uv add "bampy[google]"          # google-genai >= 3.3.0（Gemini / Vertex AI）
 uv add "bampy[all-providers]"   # anthropic + openai + google-genai
 ```
 
@@ -174,7 +174,7 @@ OpenAIOptions(
 
 - **依赖**：`bampy[google]`
 - **API**：`google-genai`
-- **默认 base_url**：`https://generativelanguage.googleapis.com`，SDK 默认使用 `v1beta`。旧配置末尾的 `/v1beta` 也会被正确解析。
+- **默认 base_url**：`https://generativelanguage.googleapis.com`。google-genai 3 默认改用 `v1`，bampy 固定使用 `v1beta`；需要其他版本时传入 `GeminiOptions(api_version=...)` 或在 `base_url` 末尾带上版本（如 `/v1beta`），两者都会被正确解析。
 
 ```python
 model = get_model("gemini-4-argon", provider="google")
@@ -182,6 +182,7 @@ model = get_model("gemini-4-argon", provider="google")
 
 | 模型 ID | 名称 |
 | ------- | ---- |
+| `gemini-4-hydrogen` | Gemini 4 Hydrogen |
 | `gemini-4-carbon` | Gemini 4 Carbon |
 | `gemini-4-argon` | Gemini 4 Argon |
 | `gemini-3.8-flash` | Gemini 3.8 Flash |
@@ -205,7 +206,10 @@ model = get_model("gemini-4-argon", provider="google")
 ```python
 from bampy.ai import GeminiOptions
 
-# Gemini 4、3.8 / 3.7 Flash：low | medium | high；minimal 会映射为 low
+# Gemini 4 Hydrogen：low | medium | high | xhigh；minimal 会映射为 low
+GeminiOptions(thinking_level="xhigh")
+
+# Gemini 4 Carbon / Argon、3.8 / 3.7 Flash：low | medium | high；minimal 映射为 low，xhigh 映射为 high
 GeminiOptions(thinking_level="medium")
 
 # Gemini 3.6 Flash / 3.5 Flash-Lite / 3 Flash：minimal | low | medium | high
@@ -215,13 +219,13 @@ GeminiOptions(thinking_level="minimal")
 GeminiOptions(thinking_budget=8192)
 ```
 
-`SimpleStreamOptions(reasoning=...)`：Gemini 3/4 使用 `thinking_level`，`xhigh`/`max` 映射为 `high`。Gemini 4、3.8 / 3.7 Flash 与 3.1 Pro 保留 `medium`，`minimal` 映射为 `low`；旧的 Gemini 3 Pro 仅支持 `low`/`high`。Gemini 2.5 使用 `thinking_budget`。不传 reasoning 时保留后端默认值，例如 3.8 Flash 为 `medium`，3.5 Flash-Lite 为 `minimal`。
+`SimpleStreamOptions(reasoning=...)`：Gemini 3/4 使用 `thinking_level`。`xhigh`/`max` 在 `reasoning_efforts` 含 `xhigh` 的模型（目前为 Gemini 4 Hydrogen）上映射为 `xhigh`，其余映射为 `high`；自定义注册的模型需在 `reasoning_efforts` 中声明 `xhigh` 才会发送该级别。Gemini 4、3.8 / 3.7 Flash 与 3.1 Pro 保留 `medium`，`minimal` 映射为 `low`；旧的 Gemini 3 Pro 仅支持 `low`/`high`。Gemini 2.5 使用 `thinking_budget`。不传 reasoning 时保留后端默认值，例如 Gemini 4 Hydrogen 为 `high`，3.8 Flash 为 `medium`，3.5 Flash-Lite 为 `minimal`。
 
 Gemini 3.5+ 使用 `thinking_level`；传入旧的 `thinking_budget` 时，适配器会在发请求前返回配置错误；同时设置 budget 和 level 也会被拒绝。这些新型号不发送 `temperature`，并在本地拒绝以 assistant/model 预填充结束的请求。3.5+ 工具调用会原样保留调用 ID、thought signature，以及图片工具结果；签名独立保留在原有内容块中。
 
 Gemini 4 的输入、thinking 和输出共享 1,048,576 tokens。内置 `max_tokens=65536` 是默认输出预算；需要长输出时显式传入 `GeminiOptions(max_tokens=131072)` 或 `SimpleStreamOptions(max_tokens=131072)`，新版 SDK 自动跟随 continuation token。每段请求默认超时 20 分钟，可用 `GeminiOptions(timeout_ms=...)` 调整。接口仍使用 GenerateContent，bampy 自行管理对话历史。
 
-用量统计中，`input` 不含缓存命中，`cache_read` 单独计费，`output` 包含 thinking。SDK 已累加长输出各段的 usage，bampy 读取最新累计值。内置 Gemini 4 Argon（2026-10-18 快照）与 Carbon（2026-11-11 快照）价格按标准、global 费率记录：输入/缓存输入/输出分别为 $2/$0.10/$10 每百万 tokens，有效至 2026-11-30；之后官方公布的费率为 $4/$0.20/$20。Gemini 4 Carbon 在 Developer API 上没有免费层，在 Vertex 上面向通过验证的企业客户开放。模型注册表是静态快照，日期、区域或合同价格不同时应通过 `register_model` 覆盖 `cost`。
+用量统计中，`input` 不含缓存命中，`cache_read` 单独计费，`output` 包含 thinking。SDK 已累加长输出各段的 usage，bampy 读取最新累计值。内置 Gemini 4 Argon（2026-10-18 快照）与 Carbon（2026-11-11 快照）价格按标准、global 费率记录：输入/缓存输入/输出分别为 $2/$0.10/$10 每百万 tokens，有效至 2026-11-30；之后官方公布的费率为 $4/$0.20/$20。Gemini 4 Carbon 在 Developer API 上没有免费层，在 Vertex 上面向通过验证的企业客户开放。Gemini 4 Hydrogen（2026-11-13 快照）为 $1.50/$0.075/$7.50，无优惠期，Developer API 提供免费层；Vertex non-global 区域上浮 10%。Hydrogen 只有隐式缓存，Vertex 计划自 2027-01-12 起对显式缓存写入按 1.25 倍输入价计费，bampy 当前不使用显式缓存，因此未登记 `cache_write`。模型注册表是静态快照，日期、区域或合同价格不同时应通过 `register_model` 覆盖 `cost`。
 
 官方参考：[Gemini 4 GenerateContent 迁移](https://ai.google.dev/gemini-api/docs/generate-content/latest-model)、[thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)。
 
@@ -231,11 +235,11 @@ Gemini 3.8 / 3.7 / 3.6 Flash 的标准 global 价格快照（2026-10-18）为输
 
 ## Google Vertex AI
 
-- **依赖**：同样安装 `bampy[google]`，要求 `google-genai >= 2.30.1`。
+- **依赖**：同样安装 `bampy[google]`，要求 `google-genai >= 3.3.0`（`xhigh` thinking level 自 3.3.0 起可用）。SDK 3 默认 HTTP 客户端为 `httpx2`。
 - **API / provider**：`google-vertex`。SDK 新文档将渠道称为 Gemini Enterprise Agent Platform，原 Vertex AI 配置仍适用。
 - **端点**：由 SDK 按项目、区域解析，内置模型的 `base_url` 留空。
 
-内置 Gemini 4 Carbon、Gemini 4 Argon、3.8 / 3.7 / 3.6 Flash、3.5 Flash-Lite、3.1 Pro Preview、3 Flash Preview、3.1 Flash-Lite 和 Gemini 2.5 Pro/Flash/Flash-Lite。模型可用性取决于项目权限、区域和 Google 的下线计划；其他型号可注册 `api="google-vertex"` 的自定义模型。
+内置 Gemini 4 Hydrogen、Gemini 4 Carbon、Gemini 4 Argon、3.8 / 3.7 / 3.6 Flash、3.5 Flash-Lite、3.1 Pro Preview、3 Flash Preview、3.1 Flash-Lite 和 Gemini 2.5 Pro/Flash/Flash-Lite。模型可用性取决于项目权限、区域和 Google 的下线计划；其他型号可注册 `api="google-vertex"` 的自定义模型。
 
 使用 Application Default Credentials（本地 `gcloud auth application-default login`，服务器使用工作负载身份或服务账号）：
 
@@ -275,7 +279,7 @@ Vertex Express 使用 `VertexAIOptions(api_key="...")`；`stream_simple` 可通�
 
 两个渠道按 `Model.api` 明确选择，不受 `GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE` 全局开关干扰。`stream_simple` / Agent 使用 SDK 环境变量及 ADC；需要逐次传入项目、区域或 Credentials 时，使用 `stream(..., VertexAIOptions(...))`。
 
-官方参考：Gemini 4 Vertex AI 开发指南（[Argon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)、[Carbon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-carbon)）、[SDK](https://googleapis.github.io/python-genai/)、[Vertex 定价](https://cloud.google.com/vertex-ai/generative-ai/pricing)。
+官方参考：Gemini 4 Vertex AI 开发指南（[Hydrogen](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-hydrogen)、[Argon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)、[Carbon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-carbon)）、[SDK](https://googleapis.github.io/python-genai/)、[Vertex 定价](https://cloud.google.com/vertex-ai/generative-ai/pricing)。
 
 ---
 

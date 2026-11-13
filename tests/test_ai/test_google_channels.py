@@ -6,7 +6,7 @@ import asyncio
 import base64
 import json
 
-import httpx
+import httpx2
 import pytest
 from google import genai
 from google.oauth2.credentials import Credentials
@@ -53,6 +53,7 @@ def sdk(monkeypatch):
         "GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION", "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI",
         "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL",
+        "GOOGLE_GENAI_API_VERSION", "GOOGLE_GENAI_HTTP_CLIENT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -66,9 +67,9 @@ def sdk(monkeypatch):
         def respond(self, request):
             self.requests.append(request)
             reply = self.replies.pop(0)
-            if isinstance(reply, httpx.Response):
+            if isinstance(reply, httpx2.Response):
                 return reply
-            return httpx.Response(
+            return httpx2.Response(
                 200, headers={"Content-Type": "text/event-stream"}, content=_sse(reply),
             )
 
@@ -76,8 +77,8 @@ def sdk(monkeypatch):
             self.client_kwargs.append(kwargs)
             kwargs["http_options"] = {
                 **kwargs.get("http_options", {}),
-                "client_args": {"transport": httpx.MockTransport(self.respond)},
-                "async_client_args": {"transport": httpx.MockTransport(self.respond)},
+                "client_args": {"transport": httpx2.MockTransport(self.respond)},
+                "async_client_args": {"transport": httpx2.MockTransport(self.respond)},
             }
             client = real_client(**kwargs)
             self.transports.append((client._api_client._httpx_client, client._api_client._async_httpx_client))
@@ -110,7 +111,7 @@ def _options(channel="google", **kwargs):
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
     "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_modern_gemini_request_and_tool_roundtrip(sdk, channel, model_id):
@@ -152,7 +153,10 @@ async def test_modern_gemini_request_and_tool_roundtrip(sdk, channel, model_id):
     fr = body["contents"][2]["parts"][0]["functionResponse"]
     assert fc_part["functionCall"]["id"] == fr["id"] == "call:42"
     assert fc_part["thoughtSignature"] == signature
-    assert fr["parts"][0]["inline_data"]["mime_type"] == "image/png"
+    # Proto JSON accepts both field spellings; SDK 3 emits camelCase for Vertex.
+    media = fr["parts"][0]
+    inline = media.get("inlineData", media.get("inline_data"))
+    assert inline == {"data": "aGk=", "mime_type": "image/png"}
     if model_id.startswith("gemini-4-"):
         assert sdk.client_kwargs[0]["http_options"]["timeout"] == 1_200_000
     if channel == "google-vertex":
@@ -197,8 +201,32 @@ async def test_flash_simple_reasoning_wire_config(sdk, channel, model_id, minima
 
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
+@pytest.mark.parametrize("model_id,reasoning,expected", [
+    ("gemini-4-hydrogen", "minimal", "LOW"),
+    ("gemini-4-hydrogen", "medium", "MEDIUM"),
+    ("gemini-4-hydrogen", "high", "HIGH"),
+    ("gemini-4-hydrogen", "xhigh", "XHIGH"),
+    ("gemini-4-hydrogen", "max", "XHIGH"),
+    ("gemini-4-carbon", "xhigh", "HIGH"),
+    ("gemini-4-argon", "max", "HIGH"),
+])
+async def test_gemini4_simple_reasoning_wire_config(sdk, channel, model_id, reasoning, expected):
+    sdk.replies.append([_chunk([{"text": "Hello"}], finish="STOP")])
+    result = await stream_simple(
+        _model(channel, model_id=model_id), Context(messages=[UserMessage(content="Hello")]),
+        SimpleStreamOptions(api_key="test-key", reasoning=reasoning),
+    ).result()
+    assert result.stop_reason == StopReason.STOP, result.error_message
+    thinking = json.loads(sdk.requests[0].content)["generationConfig"]["thinkingConfig"]
+    assert thinking["thinking_level"] == expected
+    assert "thinking_budget" not in thinking
+    sdk.assert_closed()
+
+
+@pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model_id):
     result = await stream(
@@ -211,7 +239,7 @@ async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model
 
 
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
     "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_gemini_rejects_assistant_prefills(sdk, model_id):
@@ -309,6 +337,8 @@ async def test_vertex_express_key_and_custom_endpoint(sdk):
 
 
 @pytest.mark.parametrize("base_url,api_version,path", [
+    ("https://gateway.example", None, "/v1beta/models/gemini-4-argon:streamGenerateContent"),
+    ("https://gateway.example", "v1", "/v1/models/gemini-4-argon:streamGenerateContent"),
     ("https://gateway.example/v1beta", None, "/v1beta/models/gemini-4-argon:streamGenerateContent"),
     ("https://gateway.example/proxy/v1beta/", "v1alpha", "/proxy/v1alpha/models/gemini-4-argon:streamGenerateContent"),
 ])
@@ -402,7 +432,7 @@ async def test_incomplete_stream_is_error(sdk):
 
 
 async def test_http_error_closes_clients(sdk):
-    sdk.replies.append(httpx.Response(400, json={"error": {"code": 400, "message": "bad input"}}))
+    sdk.replies.append(httpx2.Response(400, json={"error": {"code": 400, "message": "bad input"}}))
     result = await stream(_model(), Context(messages=[UserMessage(content="Hello")]), _options()).result()
     assert result.stop_reason == StopReason.ERROR
     assert "bad input" in result.error_message
@@ -413,7 +443,7 @@ async def test_cancellation_closes_stream_and_clients(sdk):
     started = asyncio.Event()
     closed = asyncio.Event()
 
-    class PendingStream(httpx.AsyncByteStream):
+    class PendingStream(httpx2.AsyncByteStream):
         async def __aiter__(self):
             yield _sse([_chunk([{"text": "partial"}])])
             started.set()
@@ -422,7 +452,7 @@ async def test_cancellation_closes_stream_and_clients(sdk):
         async def aclose(self):
             closed.set()
 
-    sdk.replies.append(httpx.Response(200, stream=PendingStream(), headers={"Content-Type": "text/event-stream"}))
+    sdk.replies.append(httpx2.Response(200, stream=PendingStream(), headers={"Content-Type": "text/event-stream"}))
     cancellation = CancellationToken()
     response = stream(_model(), Context(messages=[UserMessage(content="Hello")]), _options(cancellation=cancellation))
     await asyncio.wait_for(started.wait(), timeout=2)
