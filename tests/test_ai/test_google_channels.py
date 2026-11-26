@@ -111,8 +111,8 @@ def _options(channel="google", **kwargs):
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
-    "gemini-3.6-flash", "gemini-3.5-flash-lite",
+    "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_modern_gemini_request_and_tool_roundtrip(sdk, channel, model_id):
     signature = base64.b64encode(b"opaque-signature").decode()
@@ -202,6 +202,10 @@ async def test_flash_simple_reasoning_wire_config(sdk, channel, model_id, minima
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id,reasoning,expected", [
+    ("gemini-4-neon", "minimal", "LOW"),
+    ("gemini-4-neon", "high", "HIGH"),
+    ("gemini-4-neon", "xhigh", "XHIGH"),
+    ("gemini-4-neon", "max", "XHIGH"),
     ("gemini-4-hydrogen", "minimal", "LOW"),
     ("gemini-4-hydrogen", "medium", "MEDIUM"),
     ("gemini-4-hydrogen", "high", "HIGH"),
@@ -225,7 +229,7 @@ async def test_gemini4_simple_reasoning_wire_config(sdk, channel, model_id, reas
 
 @pytest.mark.parametrize("channel", ["google", "google-vertex"])
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.7-flash",
     "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model_id):
@@ -239,8 +243,8 @@ async def test_new_flash_budget_fails_before_client_creation(sdk, channel, model
 
 
 @pytest.mark.parametrize("model_id", [
-    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
-    "gemini-3.6-flash", "gemini-3.5-flash-lite",
+    "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
 ])
 async def test_new_gemini_rejects_assistant_prefills(sdk, model_id):
     model = _model(model_id=model_id)

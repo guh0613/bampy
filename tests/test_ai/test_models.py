@@ -37,6 +37,7 @@ class TestModelRegistry:
 
     @pytest.mark.parametrize("provider", ["google", "google-vertex"])
     @pytest.mark.parametrize("model_id,efforts,cost", [
+        ("gemini-4-neon", ["low", "medium", "high", "xhigh"], (3.0, 15.0, 0.15)),
         ("gemini-4-hydrogen", ["low", "medium", "high", "xhigh"], (1.5, 7.5, 0.075)),
         ("gemini-4-carbon", ["low", "medium", "high"], (2.0, 10.0, 0.10)),
         ("gemini-4-argon", ["low", "medium", "high"], (2.0, 10.0, 0.10)),

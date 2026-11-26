@@ -421,6 +421,11 @@ class TestThinkingMapping:
         ("gemini-4-carbon", ThinkingLevel.XHIGH, "high"),
         ("gemini-4-carbon", ThinkingLevel.MAX, "high"),
         ("projects/p/locations/global/publishers/google/models/gemini-4-carbon", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-neon", ThinkingLevel.MINIMAL, "low"),
+        ("gemini-4-neon", ThinkingLevel.HIGH, "high"),
+        ("gemini-4-neon", ThinkingLevel.XHIGH, "xhigh"),
+        ("gemini-4-neon", ThinkingLevel.MAX, "xhigh"),
+        ("projects/p/locations/global/publishers/google/models/gemini-4-neon", ThinkingLevel.XHIGH, "xhigh"),
         ("gemini-4-hydrogen", ThinkingLevel.MINIMAL, "low"),
         ("gemini-4-hydrogen", ThinkingLevel.MEDIUM, "medium"),
         ("gemini-4-hydrogen", ThinkingLevel.HIGH, "high"),
@@ -434,6 +439,8 @@ class TestThinkingMapping:
         assert _reasoning_to_thinking_level(_thinking_model(model_id), reasoning) == expected
 
     @pytest.mark.parametrize("model_id,level,expected", [
+        ("gemini-4-neon", "xhigh", "xhigh"),
+        ("gemini-4-neon", "minimal", "low"),
         ("gemini-4-hydrogen", "xhigh", "xhigh"),
         ("gemini-4-hydrogen", "minimal", "low"),
         ("gemini-4-carbon", "xhigh", "high"),
